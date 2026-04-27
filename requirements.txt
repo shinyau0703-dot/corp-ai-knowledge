@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+psycopg[binary]
+python-dotenv
+pyjwt
+bcrypt
+sentence-transformers
+chromadb==0.4.24
+numpy==1.26.4
+python-multipart

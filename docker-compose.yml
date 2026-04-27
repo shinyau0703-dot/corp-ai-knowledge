@@ -1,0 +1,72 @@
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: eaih_postgres
+    restart: always
+    env_file:
+      - .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "5433:5432"
+    volumes:
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: eaih_api
+    restart: always
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      OLLAMA_HOST: http://host.docker.internal:11434
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./logs:/app/logs
+      - /hdd-sda1/km-data/vector_store:/app/data/vector_store
+      - /hdd-sda1/km-data/chunks:/app/data/chunks
+      - /hdd-sda1/km-data/raw:/app/data/raw
+    depends_on:
+      db:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # Passed as build-time ARG so Next.js inlines it into the client bundle
+        NEXT_PUBLIC_API_BASE: http://192.168.40.155:8000
+    container_name: eaih_frontend
+    restart: always
+    ports:
+      - "3001:3001"
+    depends_on:
+      - api
+
+  adminer:
+    image: adminer
+    container_name: eaih_adminer
+    restart: always
+    ports:
+      - "8080:8080"
+    depends_on:
+      - db
+
+volumes:
+  postgres_data:
