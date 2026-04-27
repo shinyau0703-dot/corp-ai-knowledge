@@ -1,7 +1,8 @@
 import os
 from pathlib import Path
 
-PROJECT_ROOT = Path("/app")
+# Project root = the directory that contains the backend/ folder
+PROJECT_ROOT = Path(__file__).parent.parent
 DATA_ROOT = PROJECT_ROOT / "data"
 
 RAW_DIR = DATA_ROOT / "raw"

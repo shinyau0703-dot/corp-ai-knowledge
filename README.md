@@ -7,129 +7,188 @@ Altair 官方技術文件 AI 問答系統，以 RAG（Retrieval-Augmented Genera
 ## 系統架構
 
 ```
-User / Editor / Admin
-        │
-   [Next.js Frontend :3001]
-        │ NEXT_PUBLIC_API_BASE (build-time)
-        │
-   [FastAPI Backend :8000]
-        ├── PostgreSQL :5432  (users / login_logs / documents / query_logs)
-        ├── ChromaDB (local volume)  — 向量索引
-        └── Ollama (host network)   — 本地 LLM 推論
+前端 (Next.js)  →  後端 API (FastAPI)  →  PostgreSQL
+                                       →  ChromaDB（本機向量索引）
+                                       →  Ollama（本機 LLM）
 ```
 
 ---
 
-## 專案現況
+## 環境需求
 
-### 已完成
-
-| 模組 | 說明 |
-|------|------|
-| 後端 API | FastAPI：登入、搜尋、問答、上傳、管理統計、產品列表、索引觸發 |
-| 前端介面 | Next.js 16：登入頁、問答主頁（產品/版本下拉選單）、管理儀表板 |
-| Ingestion Pipeline | `backend/ingestion/` — 從 chunk JSON 批次嵌入、寫入 ChromaDB |
-| 資料庫 Schema | PostgreSQL：users / login_logs / documents / query_logs |
-| 嵌入模型 | `paraphrase-multilingual-MiniLM-L12-v2`（多語言，支援中英文） |
-| 向量資料庫 | ChromaDB persistent — medium 模式 |
-| 原始文件 | Altair PBS、HyperWorks、HyperMesh CFD、SimLab、Flux 等 PDF |
-| Chunks | medium chunks 已切分（`data/chunks/medium/`） |
-| Docker Compose | db / api / frontend / adminer 四服務 |
-
-### 待辦
-
-- [ ] 執行首次索引建立（`docker exec -it eaih_api python scripts/run_ingest.py`）
-- [ ] small chunks 切分與索引
-- [ ] 更換 `.env` 中的預設密碼與 JWT secret
-- [ ] AD/LDAP 整合（計畫書 P3 階段）
-- [ ] Re-ranker 精準重排（計畫書 P4 階段）
+| 工具 | 版本 | 說明 |
+|------|------|------|
+| Python | 3.11+ | 後端 |
+| Node.js | 20+ | 前端 |
+| PostgreSQL | 15+ | 使用者與 log 資料庫 |
+| Ollama | 最新版 | 本機 LLM 推論 |
 
 ---
 
 ## 快速啟動
 
-### 1. 設定環境變數
+### 1. clone 專案
 
-複製並修改 `.env`（請務必更換密碼）：
+```bash
+git clone https://github.com/shinyaus0703-dot/corp-ai-knowledge.git
+cd corp-ai-knowledge
+```
+
+### 2. 設定環境變數
+
+```bash
+cp .env.example .env
+```
+
+編輯 `.env`，填入實際值：
 
 ```env
-POSTGRES_HOST=db
+POSTGRES_HOST=localhost
 POSTGRES_PORT=5432
 POSTGRES_DB=eaih_app
 POSTGRES_USER=eaih_app
-POSTGRES_PASSWORD=<請修改>
-JWT_SECRET=<請修改>
-OLLAMA_HOST=http://host.docker.internal:11434
+POSTGRES_PASSWORD=你的資料庫密碼
+JWT_SECRET=你的JWT金鑰
+OLLAMA_HOST=http://127.0.0.1:11434
 ```
 
-### 2. 確認資料位置
+### 3. 放入資料
 
-伺服器上需有以下目錄（docker-compose 掛載來源）：
+將 `data/` 資料夾放到專案根目錄下：
 
 ```
-/hdd-sda1/km-data/
-├── raw/          ← 原始 PDF
-├── chunks/       ← 切分後 JSON
-└── vector_store/ ← ChromaDB 索引（首次執行後自動生成）
+corp-ai-knowledge/
+└── data/
+    ├── raw/           ← 原始 PDF
+    ├── chunks/
+    │   └── medium/    ← chunk JSON 檔案
+    └── vector_store/  ← ChromaDB 索引（有的話直接用，沒有跑步驟 6）
 ```
 
-### 3. 啟動服務
+### 4. 安裝後端套件
 
 ```bash
-docker compose up -d
+pip install -r requirements.txt
 ```
 
-| 服務 | 網址 |
-|------|------|
-| 前端 | http://192.168.40.155:3001 |
-| API | http://192.168.40.155:8000 |
-| API Docs | http://192.168.40.155:8000/docs |
-| Adminer | http://192.168.40.155:8080 |
+### 5. 建立資料庫
 
-### 4. 建立向量索引（首次執行必做）
+確認 PostgreSQL 已啟動，執行：
 
 ```bash
-docker exec -it eaih_api python scripts/run_ingest.py
+psql -U postgres -c "CREATE USER eaih_app WITH PASSWORD '你的密碼';"
+psql -U postgres -c "CREATE DATABASE eaih_app OWNER eaih_app;"
+psql -U eaih_app -d eaih_app -f db/init.sql
 ```
 
-### 5. 建立第一個管理員帳號
+### 6. 建立向量索引（首次必做，或有新資料時）
 
 ```bash
-docker exec -it eaih_postgres psql -U eaih_app -d eaih_app -c \
-  "INSERT INTO users(username, password_hash, role) VALUES('admin', '<bcrypt_hash>', 'admin');"
+python scripts/run_ingest.py
+```
+
+### 7. 啟動後端
+
+```bash
+uvicorn backend.main:app --reload --port 8000
+```
+
+### 8. 安裝並啟動前端
+
+```bash
+cd frontend
+npm install
+```
+
+建立 `frontend/.env.local`：
+
+```env
+NEXT_PUBLIC_API_BASE=http://localhost:8000
+```
+
+啟動：
+
+```bash
+npm run dev
+```
+
+瀏覽器開啟 `http://localhost:3000`
+
+---
+
+## 建立第一個管理員帳號
+
+後端啟動後執行：
+
+```bash
+python scripts/create_admin.py
+```
+
+或手動：
+
+```bash
+python -c "
+from backend.auth import hash_password
+print(hash_password('你想設的密碼'))
+"
+```
+
+再把 hash 寫入資料庫：
+
+```sql
+INSERT INTO users(username, password_hash, role)
+VALUES('admin', '上面產生的hash', 'admin');
 ```
 
 ---
 
-## 目錄結構
+## 日常開發
+
+| 服務 | 指令 | 網址 |
+|------|------|------|
+| 後端 API | `uvicorn backend.main:app --reload --port 8000` | http://localhost:8000 |
+| API 文件 | （後端啟動後自動可用） | http://localhost:8000/docs |
+| 前端 | `cd frontend && npm run dev` | http://localhost:3000 |
+
+---
+
+## 協作開發流程
+
+```
+本機改 code → 測試 OK → git push → 通知另一位 → git pull → 繼續開發
+```
+
+---
+
+## 專案結構
 
 ```
 corp-ai-knowledge/
 ├── backend/
-│   ├── main.py          # FastAPI 主程式（所有 API endpoints）
+│   ├── main.py          # FastAPI 主程式
 │   ├── auth.py          # JWT 驗證、bcrypt 密碼
-│   ├── config.py        # 路徑設定、Ollama host
-│   ├── database.py      # PostgreSQL 連線（psycopg3）
+│   ├── config.py        # 路徑設定（自動對應專案根目錄）
+│   ├── database.py      # PostgreSQL 連線
 │   ├── embedder.py      # SentenceTransformer 向量化
 │   ├── search.py        # ChromaDB 查詢 + metadata 重排
-│   ├── ollama.py        # 呼叫本機 Ollama 產生回答
+│   ├── ollama.py        # 呼叫本機 Ollama
 │   └── ingestion/
 │       └── __init__.py  # chunk JSON → embed → ChromaDB
 ├── frontend/
 │   └── app/
-│       ├── page.tsx     # 問答主頁（產品/版本下拉、來源顯示）
+│       ├── page.tsx     # 問答主頁
 │       └── login/page.tsx
 ├── scripts/
-│   └── run_ingest.py    # 手動觸發索引建立
+│   ├── run_ingest.py    # 建立向量索引
+│   └── create_admin.py  # 建立管理員帳號
 ├── db/
 │   └── init.sql         # PostgreSQL schema
-├── data/
-│   ├── raw/             ← 掛載自 /hdd-sda1/km-data/raw
-│   ├── chunks/medium/   ← 掛載自 /hdd-sda1/km-data/chunks
-│   └── vector_store/    ← 掛載自 /hdd-sda1/km-data/vector_store
-├── docker-compose.yml
-├── Dockerfile.api
-└── .env
+├── data/                # ← 不進 git，各自放置
+│   ├── raw/
+│   ├── chunks/
+│   └── vector_store/
+├── requirements.txt
+└── .env                 # ← 不進 git
 ```
 
 ---
@@ -140,22 +199,12 @@ corp-ai-knowledge/
 |------|------|------|------|
 | GET | `/api/health` | 無 | 健康檢查 |
 | POST | `/api/login` | 無 | 登入，回傳 JWT |
-| GET | `/api/products?mode=medium` | 無 | 產品 / 版本清單 |
-| POST | `/api/search` | 登入 | 語意搜尋，回傳相關段落 |
-| POST | `/api/ask` | 登入 | RAG 問答，回傳 AI 回答與來源 |
+| GET | `/api/products` | 無 | 產品 / 版本清單 |
+| POST | `/api/search` | 登入 | 語意搜尋 |
+| POST | `/api/ask` | 登入 | RAG 問答 |
 | POST | `/api/upload` | editor / admin | 上傳文件 |
 | GET | `/api/admin/stats` | admin | 系統統計 |
-| POST | `/api/ingest?mode=medium` | admin | 觸發背景索引建立 |
-
----
-
-## 使用者角色
-
-| 角色 | 權限 |
-|------|------|
-| `user` | 搜尋、問答 |
-| `editor` | user 所有 + 上傳文件 |
-| `admin` | editor 所有 + 系統統計 + 觸發索引建立 |
+| POST | `/api/ingest` | admin | 觸發背景索引建立 |
 
 ---
 
@@ -171,13 +220,3 @@ corp-ai-knowledge/
 - **Feko**（v24 / v25 / v25.1）
 - **PhysicsAI**（2024 / 2025）
 - **License Management System**（v15.5 / v2025 / v2026）
-
----
-
-## 向量搜尋流程
-
-1. 查詢文字 → SentenceTransformer → 向量
-2. ChromaDB 餘弦相似度檢索（medium chunk，1000 chars/chunk）
-3. 若指定 product / version / doc_type → metadata 過濾 + 加權重排
-4. Top-K 段落組成 prompt → Ollama（qwen3:8b / 32b / 235b）
-5. 回答與來源記錄至 `query_logs`
