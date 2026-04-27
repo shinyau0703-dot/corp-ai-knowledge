@@ -46,7 +46,7 @@ frontend/.pnpm-debug.log*
 *.swo
 
 # ── Docker ───────────────────────────────────────────────────────────
-# docker-compose.override.yml  ← 若有本地覆蓋設定
+docker-compose.override.yml
 
 # ── 其他 ────────────────────────────────────────────────────────────
 *.pem
