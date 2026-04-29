@@ -190,9 +190,10 @@ export default function Home() {
         </div>
       </header>
 
-      <div className="max-w-7xl mx-auto px-6 py-6 grid gap-6 lg:grid-cols-[260px_1fr]">
+      <div className={`max-w-7xl mx-auto px-6 py-6 ${user?.role === "admin" ? "grid gap-6 lg:grid-cols-[260px_1fr]" : "flex justify-center"}`}>
         {/* Sidebar */}
-        <aside className="p-4 border-r space-y-5">
+        {user?.role === "admin" && (
+          <aside className="p-4 border-r space-y-5">
           {/* Filter panel */}
           <div className="mb-6">
             <span className="bg-blue-100 text-black px-2 py-1 rounded text-sm font-bold mb-4 inline-block">
@@ -295,10 +296,11 @@ export default function Home() {
               )}
             </div>
           )}
-        </aside>
+          </aside>
+        )}
 
         {/* Main content */}
-        <div className="space-y-5">
+        <div className={`space-y-5 ${user?.role === "admin" ? "" : "w-full max-w-4xl"}`}>
           {/* Admin dashboard */}
           {user?.role === "admin" && adminStats && (
             <div className="bg-gray-900 rounded-2xl p-6 text-white">
