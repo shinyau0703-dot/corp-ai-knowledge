@@ -47,8 +47,8 @@ cp .env.example .env
 POSTGRES_HOST=localhost
 POSTGRES_PORT=5432
 POSTGRES_DB=eaih_app
-POSTGRES_USER=eaih_app
-POSTGRES_PASSWORD=你的資料庫密碼
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=810126
 JWT_SECRET=你的JWT金鑰
 OLLAMA_HOST=http://127.0.0.1:11434
 ```
@@ -104,7 +104,7 @@ npm install
 建立 `frontend/.env.local`：
 
 ```env
-NEXT_PUBLIC_API_BASE=http://localhost:8000
+NEXT_PUBLIC_API_URL=http://localhost:8000
 ```
 
 啟動：

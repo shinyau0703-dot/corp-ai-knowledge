@@ -3,7 +3,7 @@ import json
 import jwt
 import shutil
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Header, BackgroundTasks
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.cors import CORSMiddleware  # 確保有這一行
 from pydantic import BaseModel
 from backend.search import search
 from backend.ollama import generate
@@ -14,13 +14,20 @@ from backend.ingestion import ingest_chunks, list_products
 
 app = FastAPI(title="Altair Knowledge Hub API")
 
+# --- CORS 設定開始 ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://0.0.0.0:3000",
+        "http://[::1]:3000"
+    ],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["*"],  # 允許所有方法（GET, POST 等）
+    allow_headers=["*"],  # 允許所有標頭
 )
+# --- CORS 設定結束 ---
 
 # ---------------------------------------------------------------------------
 # Request models
@@ -96,43 +103,61 @@ def health():
 
 @app.post("/api/login")
 def api_login(req: LoginRequest, request: Request):
-    client_host = request.client.host if request.client else "unknown"
-    client_ua = request.headers.get("user-agent", "unknown")
+    try:
+        print(f"--- 收到登入請求 ---")
+        print(f"使用者: {req.username}, 來自 IP: {request.client.host if request.client else 'unknown'}")
+        client_host = request.client.host if request.client else "unknown"
+        client_ua = request.headers.get("user-agent", "unknown")
 
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT id, username, password_hash, role, is_active FROM users WHERE username=%s",
-                (req.username,),
-            )
-            user = cur.fetchone()
-            if not user or not user[4]:
-                if user:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id, username, password_hash, role, is_active FROM users WHERE username=%s",
+                    (req.username,),
+                )
+                user = cur.fetchone()
+                if not user or not user[4]:
+                    if user:
+                        cur.execute(
+                            "INSERT INTO login_logs(user_id, ip_address, user_agent, status) VALUES(%s,%s,%s,'failed')",
+                            (user[0], client_host, client_ua),
+                        )
+                        conn.commit()
+                    raise HTTPException(status_code=401, detail="帳號或密碼錯誤")
+
+                user_id, username, password_hash, role, _ = user
+                if not verify_password(req.password, password_hash):
                     cur.execute(
                         "INSERT INTO login_logs(user_id, ip_address, user_agent, status) VALUES(%s,%s,%s,'failed')",
-                        (user[0], client_host, client_ua),
+                        (user_id, client_host, client_ua),
                     )
                     conn.commit()
-                raise HTTPException(status_code=401, detail="帳號或密碼錯誤")
+                    raise HTTPException(status_code=401, detail="帳號或密碼錯誤")
 
-            user_id, username, password_hash, role, _ = user
-            if not verify_password(req.password, password_hash):
+                cur.execute("UPDATE users SET last_login_at=NOW() WHERE id=%s", (user_id,))
                 cur.execute(
-                    "INSERT INTO login_logs(user_id, ip_address, user_agent, status) VALUES(%s,%s,%s,'failed')",
+                    "INSERT INTO login_logs(user_id, ip_address, user_agent, status) VALUES(%s,%s,%s,'success')",
                     (user_id, client_host, client_ua),
                 )
                 conn.commit()
-                raise HTTPException(status_code=401, detail="帳號或密碼錯誤")
 
-            cur.execute("UPDATE users SET last_login_at=NOW() WHERE id=%s", (user_id,))
-            cur.execute(
-                "INSERT INTO login_logs(user_id, ip_address, user_agent, status) VALUES(%s,%s,%s,'success')",
-                (user_id, client_host, client_ua),
-            )
-            conn.commit()
+        token = create_access_token({"sub": str(user_id), "username": username, "role": role})
+        return {
+            "access_token": token,
+            "token_type": "bearer",
+            "user": {
+                "username": username,
+                "role": role
+            }
+        }
 
-    token = create_access_token({"sub": str(user_id), "username": username, "role": role})
-    return {"access_token": token, "token_type": "bearer", "role": role, "username": username}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ 登入處理發生錯誤: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
 
 @app.get("/api/products")

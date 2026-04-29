@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
-const API = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
+const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -27,10 +27,15 @@ export default function LoginPage() {
         throw new Error(data.detail || "帳號或密碼錯誤");
       }
       const data = await res.json();
+
+      // ✅ 這裡最重要：要把後端傳回來的資料存起來
       localStorage.setItem("access_token", data.access_token);
-      localStorage.setItem("username", data.username);
-      localStorage.setItem("role", data.role);
-      router.push("/");
+      localStorage.setItem("username", data.user.username);
+      localStorage.setItem("role", data.user.role);
+      // 儲存完整用戶資訊物件，包含 role
+      localStorage.setItem("user", JSON.stringify(data.user));
+
+      window.location.href = "/"; // 登入成功跳轉，確保狀態重新載入
     } catch (err) {
       setError(err instanceof Error ? err.message : "發生錯誤");
     } finally {

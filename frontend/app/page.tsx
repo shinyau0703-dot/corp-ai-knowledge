@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 
-const API = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
+const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -41,8 +41,7 @@ export default function Home() {
   const router = useRouter();
 
   // Auth
-  const [username, setUsername] = useState("");
-  const [role, setRole] = useState("");
+  const [user, setUser] = useState<{ username: string; role: string } | null>(null);
   const [token, setToken] = useState("");
   const [adminStats, setAdminStats] = useState<AdminStats | null>(null);
 
@@ -72,9 +71,12 @@ export default function Home() {
     const t = localStorage.getItem("access_token");
     if (!t) { router.push("/login"); return; }
     setToken(t);
-    setUsername(localStorage.getItem("username") || "");
-    const r = localStorage.getItem("role") || "user";
-    setRole(r);
+
+    // 從 localStorage 抓取剛才存進去的資訊
+    const savedUser = localStorage.getItem("user");
+    const userData = savedUser ? JSON.parse(savedUser) : null;
+    setUser(userData);
+    const r = userData?.role || "user";
 
     // Fetch product catalog (no auth required)
     fetch(`${API}/api/products?mode=medium`)
@@ -99,8 +101,10 @@ export default function Home() {
   // Actions
   // -------------------------------------------------------------------------
   const handleLogout = () => {
-    localStorage.clear();
-    router.push("/login");
+    localStorage.removeItem('access_token'); // 清除本地存儲的 JWT
+    localStorage.removeItem('username');   // 清除本地存儲的 username
+    localStorage.removeItem('role');       // 清除本地存儲的 role
+    window.location.href = '/login';   // 跳轉回登入頁
   };
 
   const ask = useCallback(async () => {
@@ -156,21 +160,24 @@ export default function Home() {
   // -------------------------------------------------------------------------
   // Render
   // -------------------------------------------------------------------------
+  // 照妖鏡：看看這次是不是拿到真的資料了
+  console.log("這次抓到的身分是:", user?.role);
+
   return (
     <main className="min-h-screen bg-gray-50">
       {/* Header */}
       <header className="bg-white border-b px-6 py-4 flex items-center justify-between shadow-sm">
         <div>
-          <h1 className="text-xl font-bold text-gray-900">Altair Knowledge Hub</h1>
+          <h1 className="text-[#0066CC] font-bold text-xl">Altair Knowledge Hub</h1>
           <p className="text-xs text-gray-400">官方技術文件 AI 問答系統</p>
         </div>
         <div className="flex items-center gap-4">
           <span className="text-sm text-gray-500">
-            <span className="font-medium text-gray-800">{username}</span>
-            {role === "admin" && (
+            <span className="font-medium text-gray-800">{user?.username}</span>
+            {user?.role === "admin" && (
               <span className="ml-2 text-xs bg-red-100 text-red-600 px-2 py-0.5 rounded-full font-medium">admin</span>
             )}
-            {role === "editor" && (
+            {user?.role === "editor" && (
               <span className="ml-2 text-xs bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full font-medium">editor</span>
             )}
           </span>
@@ -185,71 +192,79 @@ export default function Home() {
 
       <div className="max-w-7xl mx-auto px-6 py-6 grid gap-6 lg:grid-cols-[260px_1fr]">
         {/* Sidebar */}
-        <aside className="space-y-5">
+        <aside className="p-4 border-r space-y-5">
           {/* Filter panel */}
-          <div className="bg-white rounded-2xl border p-5 shadow-sm">
-            <h2 className="text-sm font-semibold text-gray-700 mb-4">篩選條件</h2>
+          <div className="mb-6">
+            <span className="bg-blue-100 text-black px-2 py-1 rounded text-sm font-bold mb-4 inline-block">
+              篩選條件
+            </span>
             <div className="space-y-4">
-              {/* Product */}
-              <div>
-                <label className="text-xs font-medium text-gray-500 mb-1 block">產品</label>
-                <select
-                  className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-400"
+              {/* --- 1. 手冊類型 (最前面) --- */}
+              <div className="mb-4">
+                <label className="text-[#272727] font-medium mb-1 block bg-transparent">
+                  手冊類型
+                </label>
+                <select 
+                  className="w-full p-2 border border-gray-200 rounded text-[#3C3C3C] bg-transparent focus:outline-none"
+                  value={docType}
+                  onChange={e => setDocType(e.target.value)}
+                >
+                  <option value="altair_manual" className="bg-white">altair_官方軟體手冊</option>
+                  <option value="cfd_install" className="bg-white">cfd_官方安裝手冊</option>
+                </select>
+              </div>
+
+              {/* --- 2. 產品 (照 D 槽資料夾開頭命名) --- */}
+              <div className="mb-4">
+                <label className="text-[#272727] font-medium mb-1 block bg-transparent">
+                  產品
+                </label>
+                <select 
+                  className="w-full p-2 border border-gray-200 rounded text-[#3C3C3C] bg-transparent focus:outline-none"
                   value={selectedProduct}
                   onChange={e => setSelectedProduct(e.target.value)}
                 >
-                  <option value="">全部產品</option>
-                  {catalog.map(p => (
-                    <option key={p.product} value={p.product}>{p.product}</option>
-                  ))}
+                  <option value="altair" className="bg-white">altair</option>
+                  <option value="cfd" className="bg-white">cfd</option>
                 </select>
               </div>
 
-              {/* Version */}
-              <div>
-                <label className="text-xs font-medium text-gray-500 mb-1 block">版本</label>
+              {/* --- 3. 版本 (照 D 槽子目錄命名) --- */}
+              <div className="mb-4">
+                <label className="text-[#272727] font-medium mb-1 block bg-transparent">
+                  版本
+                </label>
                 <select
-                  className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-400"
+                  className="w-full p-2 border border-gray-200 rounded text-[#3C3C3C] bg-transparent focus:outline-none"
                   value={selectedVersion}
                   onChange={e => setSelectedVersion(e.target.value)}
-                  disabled={!selectedProduct}
                 >
-                  <option value="">全部版本</option>
-                  {currentVersions.map(v => (
-                    <option key={v} value={v}>{v}</option>
-                  ))}
+                  <option value="2024" className="bg-white">2024</option>
+                  <option value="2023" className="bg-white">2023</option>
+                  <option value="2022" className="bg-white">2022</option>
                 </select>
               </div>
 
-              {/* Doc type */}
-              <div>
-                <label className="text-xs font-medium text-gray-500 mb-1 block">文件類型（選填）</label>
-                <input
-                  className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
-                  value={docType}
-                  onChange={e => setDocType(e.target.value)}
-                  placeholder="InstallGuide、AdminGuide…"
-                />
-              </div>
-
-              {/* Model */}
-              <div>
-                <label className="text-xs font-medium text-gray-500 mb-1 block">推論模型</label>
-                <select
-                  className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-400"
-                  value={model}
-                  onChange={e => setModel(e.target.value)}
-                >
-                  <option value="qwen3:8b">qwen3:8b（快速）</option>
-                  <option value="qwen3:32b">qwen3:32b（精準）</option>
-                  <option value="qwen3:235b-a22b">qwen3:235b-a22b（最強）</option>
-                </select>
-              </div>
+              {/* Model (僅管理者可切換) */}
+              {user?.role === "admin" && (
+                <div className="mb-4">
+                  <label className="text-[#272727] font-medium mb-1 bg-transparent block text-sm">推論模型</label>
+                  <select
+                    className="w-full p-2 border border-gray-200 rounded-md bg-transparent text-[#3C3C3C] focus:outline-none text-sm"
+                    value={model}
+                    onChange={e => setModel(e.target.value)}
+                  >
+                    <option value="qwen3:8b" className="bg-white text-[#3C3C3C]">qwen3:8b（快速）</option>
+                    <option value="qwen3:32b" className="bg-white text-[#3C3C3C]">qwen3:32b（精準）</option>
+                    <option value="qwen3:235b-a22b" className="bg-white text-[#3C3C3C]">qwen3:235b-a22b（最強）</option>
+                  </select>
+                </div>
+              )}
             </div>
           </div>
 
           {/* Upload panel */}
-          {(role === "editor" || role === "admin") && (
+          {(user?.role === "editor" || user?.role === "admin") && (
             <div className="bg-white rounded-2xl border p-5 shadow-sm">
               <h2 className="text-sm font-semibold text-gray-700 mb-4">上傳文件</h2>
               <label className="block border-2 border-dashed border-gray-200 rounded-xl p-4 text-center cursor-pointer hover:border-blue-400 transition-colors">
@@ -285,7 +300,7 @@ export default function Home() {
         {/* Main content */}
         <div className="space-y-5">
           {/* Admin dashboard */}
-          {role === "admin" && adminStats && (
+          {user?.role === "admin" && adminStats && (
             <div className="bg-gray-900 rounded-2xl p-6 text-white">
               <h2 className="text-sm font-semibold text-gray-300 mb-4">系統統計</h2>
               <div className="grid grid-cols-4 gap-4">
@@ -306,9 +321,11 @@ export default function Home() {
 
           {/* Query box */}
           <div className="bg-white rounded-2xl border p-6 shadow-sm">
-            <label className="text-sm font-semibold text-gray-700 mb-2 block">輸入問題</label>
+            <label className="mb-2 block">
+              <span className="bg-blue-100 text-black px-2 py-1 rounded text-sm font-bold">輸入問題</span>
+            </label>
             <textarea
-              className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm min-h-28 resize-none focus:outline-none focus:ring-2 focus:ring-blue-400"
+              className="w-full p-4 border rounded-lg text-gray-500 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
               value={query}
               onChange={e => setQuery(e.target.value)}
               placeholder="例：HyperWorks 2024 如何進行 Silent Mode 安裝？"
@@ -334,7 +351,9 @@ export default function Home() {
           {/* Answer */}
           <div className="bg-white rounded-2xl border p-6 shadow-sm">
             <div className="flex items-center justify-between mb-3">
-              <h2 className="text-sm font-semibold text-gray-700">AI 回答</h2>
+              <h2 className="text-sm font-semibold">
+                <span className="bg-blue-100 text-black px-2 py-1 rounded text-sm font-bold">AI 回答</span>
+              </h2>
               {result && (
                 <span className="text-xs text-gray-400">
                   {result.model} · {result.mode}
@@ -344,9 +363,26 @@ export default function Home() {
             <div className="text-sm leading-7 text-gray-800 whitespace-pre-wrap min-h-20">
               {loading
                 ? <span className="text-gray-400 animate-pulse">模型思考中…</span>
-                : result?.answer || <span className="text-gray-300">尚未查詢</span>
+                : result?.answer || <div className="text-[#3C3C3C] bg-transparent">尚未查詢</div>
               }
             </div>
+
+            {/* 參考來源摘要 (摺疊元件) */}
+            {result?.sources && result.sources.length > 0 && (
+              <details className="mt-4 pt-4 border-t border-gray-100 group">
+                <summary className="text-xs font-medium text-gray-500 cursor-pointer list-none flex items-center gap-2 hover:text-blue-600 transition-colors">
+                  <span className="group-open:rotate-90 transition-transform text-[10px]">▶</span>
+                  查看參考來源 ({result.sources.length} 筆)
+                </summary>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {result.sources.map((s, i) => (
+                    <span key={i} className="text-[10px] bg-blue-50 text-blue-700 px-2 py-1 rounded border border-blue-100">
+                      [{s.source_file}]
+                    </span>
+                  ))}
+                </div>
+              </details>
+            )}
           </div>
 
           {/* Sources */}
