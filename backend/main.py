@@ -274,6 +274,58 @@ def get_analytics(authorization: str = Header(None)):
     }
 
 
+_PRODUCT_LABELS = {
+    "activate-libs": "Activate Libraries", "connectme": "ConnectMe",
+    "electronics": "Electronics", "feko": "Feko", "flux": "Flux / FluxMotor",
+    "hypermesh-cfd": "HyperMesh CFD", "hyperworks": "HyperWorks",
+    "cast": "Cast", "compose": "Compose", "extrude": "Extrude",
+    "form": "Form", "inspire": "Inspire", "mold": "Mold", "polyfoam": "PolyFoam",
+    "license": "License Management", "pbs": "PBS Professional",
+    "physicsai": "PhysicsAI", "simlab": "SimLab", "studio": "Studio",
+    "twin-activate": "Twin Activate", "floefd": "FLOEFD",
+    "flotherm": "Flotherm", "star-ccm+": "STAR-CCM+",
+}
+_VENDOR_LABELS = {"altair": "Altair", "siemens-cfd": "Siemens CFD"}
+
+
+def _walk(path, depth=0):
+    children = []
+    file_count = 0
+    try:
+        entries = sorted(path.iterdir(), key=lambda p: (p.is_file(), p.name.lower()))
+    except PermissionError:
+        return {"label": path.name, "type": "dir", "total_files": 0, "children": []}
+    for item in entries:
+        if item.name.startswith("."):
+            continue
+        if item.is_file():
+            if item.suffix.lower() == ".pdf":
+                children.append({"label": item.name, "type": "file"})
+                file_count += 1
+        else:
+            label = _PRODUCT_LABELS.get(item.name.lower(), item.name)
+            sub = _walk(item, depth + 1)
+            sub["label"] = label
+            file_count += sub["total_files"]
+            children.append(sub)
+    return {"label": path.name, "type": "dir", "total_files": file_count, "children": children}
+
+
+@app.get("/api/filetree")
+def api_filetree(authorization: str = Header(None)):
+    get_current_user(authorization)
+    from backend.config import RAW_DIR
+    result = []
+    for vendor_dir in sorted(RAW_DIR.iterdir()):
+        if not vendor_dir.is_dir() or vendor_dir.name.startswith("."):
+            continue
+        node = _walk(vendor_dir)
+        node["label"] = _VENDOR_LABELS.get(vendor_dir.name.lower(), vendor_dir.name)
+        node["type"] = "vendor"
+        result.append(node)
+    return result
+
+
 @app.post("/api/search")
 def api_search(req: SearchRequest, authorization: str = Header(None)):
     get_current_user(authorization)
