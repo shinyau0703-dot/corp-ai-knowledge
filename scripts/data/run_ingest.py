@@ -8,7 +8,7 @@ import os
 import time
 
 # Allow running from repo root
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 from backend.ingestion import ingest_chunks
 
