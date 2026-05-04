@@ -154,7 +154,7 @@ export default function Home() {
   const [adminStats, setAdminStats]         = useState<Stats | null>(null);
   const [adminLogs, setAdminLogs]           = useState<LogEntry[]>([]);
   const [adminAnalytics, setAdminAnalytics] = useState<Analytics | null>(null);
-  const [fileTree, setFileTree]             = useState<TreeNode[]>([]);
+  const [fileTree, setFileTree]             = useState<TreeNode[] | null>(null);
   const [uploadFile, setUploadFile]         = useState<File | null>(null);
   const [uploading, setUploading]           = useState(false);
   const [uploadMsg, setUploadMsg]           = useState("");
@@ -182,12 +182,13 @@ export default function Home() {
 
   useEffect(() => {
     if (section !== "admin" || !token) return;
+    setFileTree(null);
     const h = { Authorization: `Bearer ${token}` };
     const safe = (url: string) => fetch(url, { headers: h }).then(r => r.ok ? r.json() : null).catch(() => null);
     safe(`${API}/api/stats`).then(d => { if (d && typeof d.total_users === "number") setAdminStats(d); });
     safe(`${API}/api/logs?limit=100`).then(d => { if (Array.isArray(d)) setAdminLogs(d); });
     safe(`${API}/api/analytics`).then(d => { if (d && typeof d.by_scenario === "object") setAdminAnalytics(d); });
-    safe(`${API}/api/filetree`).then(d => { if (Array.isArray(d)) setFileTree(d); });
+    safe(`${API}/api/filetree`).then(d => setFileTree(Array.isArray(d) ? d : []));
   }, [section, token]);
 
   // auto-scroll to bottom on new message
@@ -791,13 +792,15 @@ export default function Home() {
                       <div className="flex items-center justify-between px-6 py-4 border-b">
                         <h3 className="text-sm font-semibold text-gray-700">原始資料目錄</h3>
                         <span className="text-xs text-gray-400">
-                          {fileTree.reduce((a, v) => a + (v.total_files ?? 0), 0)} 個 PDF
+                          {(fileTree ?? []).reduce((a, v) => a + (v.total_files ?? 0), 0)} 個 PDF
                         </span>
                       </div>
                       <div className="overflow-y-auto max-h-[480px] p-3">
-                        {fileTree.length === 0
-                          ? <p className="text-xs text-gray-400 text-center py-8">載入中…</p>
-                          : fileTree.map((node, i) => <FileTreeNode key={`${node.label}-${i}`} node={node} depth={0} />)
+                        {fileTree === null
+                          ? <p className="text-xs text-gray-400 text-center py-8 animate-pulse">載入中…</p>
+                          : fileTree.length === 0
+                            ? <p className="text-xs text-gray-400 text-center py-8">找不到資料目錄，請確認後端服務已啟動</p>
+                            : fileTree.map((node, i) => <FileTreeNode key={`${node.label}-${i}`} node={node} depth={0} />)
                         }
                       </div>
                     </div>
