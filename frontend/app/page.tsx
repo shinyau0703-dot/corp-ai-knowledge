@@ -155,6 +155,7 @@ export default function Home() {
   const [adminLogs, setAdminLogs]           = useState<LogEntry[]>([]);
   const [adminAnalytics, setAdminAnalytics] = useState<Analytics | null>(null);
   const [fileTree, setFileTree]             = useState<TreeNode[] | null>(null);
+  const [fileTreeErr, setFileTreeErr]       = useState(false);
   const [uploadFile, setUploadFile]         = useState<File | null>(null);
   const [uploading, setUploading]           = useState(false);
   const [uploadMsg, setUploadMsg]           = useState("");
@@ -183,12 +184,16 @@ export default function Home() {
   useEffect(() => {
     if (section !== "admin" || !token) return;
     setFileTree(null);
+    setFileTreeErr(false);
     const h = { Authorization: `Bearer ${token}` };
     const safe = (url: string) => fetch(url, { headers: h }).then(r => r.ok ? r.json() : null).catch(() => null);
     safe(`${API}/api/stats`).then(d => { if (d && typeof d.total_users === "number") setAdminStats(d); });
     safe(`${API}/api/logs?limit=100`).then(d => { if (Array.isArray(d)) setAdminLogs(d); });
     safe(`${API}/api/analytics`).then(d => { if (d && typeof d.by_scenario === "object") setAdminAnalytics(d); });
-    safe(`${API}/api/filetree`).then(d => setFileTree(Array.isArray(d) ? d : []));
+    fetch(`${API}/api/filetree`, { headers: h })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(d => setFileTree(Array.isArray(d) ? d : []))
+      .catch(() => { setFileTree([]); setFileTreeErr(true); });
   }, [section, token]);
 
   // auto-scroll to bottom on new message
@@ -791,16 +796,31 @@ export default function Home() {
                     <div className="bg-white rounded-2xl border shadow-sm overflow-hidden">
                       <div className="flex items-center justify-between px-6 py-4 border-b">
                         <h3 className="text-sm font-semibold text-gray-700">原始資料目錄</h3>
-                        <span className="text-xs text-gray-400">
-                          {(fileTree ?? []).reduce((a, v) => a + (v.total_files ?? 0), 0)} 個 PDF
-                        </span>
+                        <div className="flex items-center gap-3">
+                          {fileTree !== null && fileTree.length > 0 && (
+                            <span className="text-xs text-gray-400">
+                              {fileTree.reduce((a, v) => a + (v.total_files ?? 0), 0)} 個 PDF
+                            </span>
+                          )}
+                          <button onClick={() => { setFileTree(null); setFileTreeErr(false);
+                            fetch(`${API}/api/filetree`, { headers: { Authorization: `Bearer ${token}` } })
+                              .then(r => r.ok ? r.json() : Promise.reject(r.status))
+                              .then(d => setFileTree(Array.isArray(d) ? d : []))
+                              .catch(() => { setFileTree([]); setFileTreeErr(true); });
+                          }} className="text-xs text-gray-400 hover:text-blue-500 transition-colors">↺ 重新整理</button>
+                        </div>
                       </div>
                       <div className="overflow-y-auto max-h-[480px] p-3">
                         {fileTree === null
                           ? <p className="text-xs text-gray-400 text-center py-8 animate-pulse">載入中…</p>
-                          : fileTree.length === 0
-                            ? <p className="text-xs text-gray-400 text-center py-8">找不到資料目錄，請確認後端服務已啟動</p>
-                            : fileTree.map((node, i) => <FileTreeNode key={`${node.label}-${i}`} node={node} depth={0} />)
+                          : fileTreeErr
+                            ? <div className="text-center py-8 space-y-1">
+                                <p className="text-xs text-red-400">無法連線到後端服務</p>
+                                <p className="text-xs text-gray-400">請確認 uvicorn 已啟動（port 8000）</p>
+                              </div>
+                            : fileTree.length === 0
+                              ? <p className="text-xs text-gray-400 text-center py-8">目錄為空</p>
+                              : fileTree.map((node, i) => <FileTreeNode key={`${node.label}-${i}`} node={node} depth={0} />)
                         }
                       </div>
                     </div>
