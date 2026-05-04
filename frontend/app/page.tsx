@@ -186,12 +186,19 @@ export default function Home() {
     setFileTree(null);
     setFileTreeErr(false);
     const h = { Authorization: `Bearer ${token}` };
-    const safe = (url: string) => fetch(url, { headers: h }).then(r => r.ok ? r.json() : null).catch(() => null);
+    const safe = (url: string) =>
+      fetch(url, { headers: h }).then(r => {
+        if (r.status === 401) { logout(); return null; }
+        return r.ok ? r.json() : null;
+      }).catch(() => null);
     safe(`${API}/api/stats`).then(d => { if (d && typeof d.total_users === "number") setAdminStats(d); });
     safe(`${API}/api/logs?limit=100`).then(d => { if (Array.isArray(d)) setAdminLogs(d); });
     safe(`${API}/api/analytics`).then(d => { if (d && typeof d.by_scenario === "object") setAdminAnalytics(d); });
     fetch(`${API}/api/filetree`, { headers: h })
-      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(r => {
+        if (r.status === 401) { logout(); return Promise.reject(401); }
+        return r.ok ? r.json() : Promise.reject(r.status);
+      })
       .then(d => setFileTree(Array.isArray(d) ? d : []))
       .catch(() => { setFileTree([]); setFileTreeErr(true); });
   }, [section, token]);
@@ -220,6 +227,7 @@ export default function Home() {
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({ query, mode: "medium", model: "qwen3:8b", scenario: "general", top_k: 5, product: "", version: "", doc_type: "" }),
       });
+      if (res.status === 401) { logout(); return; }
       if (!res.ok) throw new Error(`API 錯誤：${res.status}`);
       const data: AskResponse = await res.json();
       setMessages(prev => [...prev, {
