@@ -182,10 +182,12 @@ export default function Home() {
 
   useEffect(() => {
     if (section !== "admin" || !token) return;
-    fetch(`${API}/api/stats`,     { headers: { Authorization: `Bearer ${token}` } }).then(r => r.json()).then(setAdminStats).catch(console.error);
-    fetch(`${API}/api/logs?limit=100`, { headers: { Authorization: `Bearer ${token}` } }).then(r => r.json()).then(d => { if (Array.isArray(d)) setAdminLogs(d); }).catch(console.error);
-    fetch(`${API}/api/analytics`, { headers: { Authorization: `Bearer ${token}` } }).then(r => r.json()).then(setAdminAnalytics).catch(console.error);
-    fetch(`${API}/api/filetree`,  { headers: { Authorization: `Bearer ${token}` } }).then(r => r.json()).then(d => { if (Array.isArray(d)) setFileTree(d); }).catch(console.error);
+    const h = { Authorization: `Bearer ${token}` };
+    const safe = (url: string) => fetch(url, { headers: h }).then(r => r.ok ? r.json() : null).catch(() => null);
+    safe(`${API}/api/stats`).then(d => { if (d && typeof d.total_users === "number") setAdminStats(d); });
+    safe(`${API}/api/logs?limit=100`).then(d => { if (Array.isArray(d)) setAdminLogs(d); });
+    safe(`${API}/api/analytics`).then(d => { if (d && typeof d.by_scenario === "object") setAdminAnalytics(d); });
+    safe(`${API}/api/filetree`).then(d => { if (Array.isArray(d)) setFileTree(d); });
   }, [section, token]);
 
   // auto-scroll to bottom on new message
@@ -656,9 +658,10 @@ export default function Home() {
                         <h3 className="text-sm font-semibold text-gray-700 mb-4">查詢場景分布</h3>
                         <div className="space-y-3">
                           {(() => {
-                            const max = Math.max(...Object.values(adminAnalytics.by_scenario), 1);
+                            const data = adminAnalytics.by_scenario ?? {};
+                            const max = Math.max(...Object.values(data), 1);
                             const colors: Record<string, string> = { general: "bg-gray-500", engineer: "bg-blue-500", sales: "bg-green-500", cs: "bg-purple-500" };
-                            return Object.entries(adminAnalytics.by_scenario).map(([k, v]) => (
+                            return Object.entries(data).map(([k, v]) => (
                               <StatBar key={k} label={SCENARIO_LABELS[k] ?? k} value={v} max={max} color={colors[k] ?? "bg-gray-400"} />
                             ));
                           })()}
@@ -669,8 +672,9 @@ export default function Home() {
                         <h3 className="text-sm font-semibold text-gray-700 mb-4">手冊類型分布</h3>
                         <div className="space-y-3">
                           {(() => {
-                            const max = Math.max(...Object.values(adminAnalytics.by_doc_type), 1);
-                            return Object.entries(adminAnalytics.by_doc_type).map(([k, v]) => (
+                            const data = adminAnalytics.by_doc_type ?? {};
+                            const max = Math.max(...Object.values(data), 1);
+                            return Object.entries(data).map(([k, v]) => (
                               <StatBar key={k} label={DOC_TYPE_LABELS[k] ?? k} value={v} max={max} color="bg-teal-500" />
                             ));
                           })()}
@@ -679,13 +683,14 @@ export default function Home() {
 
                       <div className="bg-white rounded-2xl border p-6 shadow-sm">
                         <h3 className="text-sm font-semibold text-gray-700 mb-4">常查產品 Top 10</h3>
-                        {adminAnalytics.by_product.length === 0 ? (
+                        {(adminAnalytics.by_product ?? []).length === 0 ? (
                           <p className="text-xs text-gray-400">尚無資料</p>
                         ) : (
                           <div className="space-y-3">
                             {(() => {
-                              const max = Math.max(...adminAnalytics.by_product.map(p => p.count), 1);
-                              return adminAnalytics.by_product.map(p => (
+                              const data = adminAnalytics.by_product ?? [];
+                              const max = Math.max(...data.map(p => p.count), 1);
+                              return data.map(p => (
                                 <StatBar key={p.product} label={p.product} value={p.count} max={max} color="bg-orange-400" />
                               ));
                             })()}
@@ -697,8 +702,9 @@ export default function Home() {
                         <h3 className="text-sm font-semibold text-gray-700 mb-4">使用模型分布</h3>
                         <div className="space-y-3">
                           {(() => {
-                            const max = Math.max(...Object.values(adminAnalytics.by_model), 1);
-                            return Object.entries(adminAnalytics.by_model).map(([k, v]) => (
+                            const data = adminAnalytics.by_model ?? {};
+                            const max = Math.max(...Object.values(data), 1);
+                            return Object.entries(data).map(([k, v]) => (
                               <StatBar key={k} label={k} value={v} max={max} color="bg-indigo-400" />
                             ));
                           })()}

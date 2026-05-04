@@ -197,81 +197,83 @@ def api_products(mode: str = "medium"):
 @app.get("/api/stats")
 def get_stats(authorization: str = Header(None)):
     get_current_user(authorization)
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM users")
-            total_users = cur.fetchone()[0]
-            cur.execute("SELECT COUNT(*) FROM documents")
-            total_docs = cur.fetchone()[0]
-            cur.execute("SELECT COUNT(*) FROM query_logs")
-            total_queries = cur.fetchone()[0]
-            cur.execute("SELECT COUNT(*) FROM login_logs")
-            total_logins = cur.fetchone()[0]
-    return {
-        "total_users": total_users,
-        "total_docs": total_docs,
-        "total_queries": total_queries,
-        "total_logins": total_logins,
-    }
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM users")
+                total_users = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(*) FROM documents")
+                total_docs = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(*) FROM query_logs")
+                total_queries = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(*) FROM login_logs")
+                total_logins = cur.fetchone()[0]
+        return {"total_users": total_users, "total_docs": total_docs,
+                "total_queries": total_queries, "total_logins": total_logins}
+    except Exception:
+        return {"total_users": 0, "total_docs": 0, "total_queries": 0, "total_logins": 0}
 
 
 @app.get("/api/logs")
 def get_logs(authorization: str = Header(None), limit: int = 100):
     get_current_user(authorization)
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT ql.id, u.username, ql.query, ql.model, ql.mode, ql.created_at,
-                       ql.sources_used, ql.scenario, ql.product, ql.version
-                FROM query_logs ql
-                LEFT JOIN users u ON ql.user_id = u.id
-                ORDER BY ql.created_at DESC
-                LIMIT %s
-                """,
-                (limit,),
-            )
-            rows = cur.fetchall()
-    return [
-        {
-            "id": r[0],
-            "username": r[1] or "—",
-            "query": r[2],
-            "model": r[3],
-            "mode": r[4],
-            "created_at": r[5].isoformat() if r[5] else None,
-            "sources_used": r[6] or [],
-            "scenario": r[7] or "general",
-            "product": r[8] or "",
-            "version": r[9] or "",
-        }
-        for r in rows
-    ]
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT ql.id, u.username, ql.query, ql.model, ql.mode, ql.created_at,
+                           ql.sources_used, ql.scenario, ql.product, ql.version
+                    FROM query_logs ql
+                    LEFT JOIN users u ON ql.user_id = u.id
+                    ORDER BY ql.created_at DESC
+                    LIMIT %s
+                    """,
+                    (limit,),
+                )
+                rows = cur.fetchall()
+        return [
+            {
+                "id": r[0],
+                "username": r[1] or "—",
+                "query": r[2],
+                "model": r[3],
+                "mode": r[4],
+                "created_at": r[5].isoformat() if r[5] else None,
+                "sources_used": r[6] or [],
+                "scenario": r[7] or "general",
+                "product": r[8] or "",
+                "version": r[9] or "",
+            }
+            for r in rows
+        ]
+    except Exception:
+        return []
 
 
 @app.get("/api/analytics")
 def get_analytics(authorization: str = Header(None)):
     get_current_user(authorization)
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT scenario, COUNT(*) FROM query_logs GROUP BY scenario ORDER BY COUNT(*) DESC")
-            by_scenario = {r[0]: r[1] for r in cur.fetchall()}
+    empty = {"by_scenario": {}, "by_doc_type": {}, "by_product": [], "by_model": {}}
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT scenario, COUNT(*) FROM query_logs GROUP BY scenario ORDER BY COUNT(*) DESC")
+                by_scenario = {r[0]: r[1] for r in cur.fetchall()}
 
-            cur.execute("SELECT COALESCE(NULLIF(doc_type, ''), '未指定'), COUNT(*) FROM query_logs GROUP BY 1 ORDER BY COUNT(*) DESC")
-            by_doc_type = {r[0]: r[1] for r in cur.fetchall()}
+                cur.execute("SELECT COALESCE(NULLIF(doc_type, ''), '未指定'), COUNT(*) FROM query_logs GROUP BY 1 ORDER BY COUNT(*) DESC")
+                by_doc_type = {r[0]: r[1] for r in cur.fetchall()}
 
-            cur.execute("SELECT product, COUNT(*) FROM query_logs WHERE product != '' GROUP BY product ORDER BY COUNT(*) DESC LIMIT 10")
-            by_product = [{"product": r[0], "count": r[1]} for r in cur.fetchall()]
+                cur.execute("SELECT product, COUNT(*) FROM query_logs WHERE product != '' GROUP BY product ORDER BY COUNT(*) DESC LIMIT 10")
+                by_product = [{"product": r[0], "count": r[1]} for r in cur.fetchall()]
 
-            cur.execute("SELECT model, COUNT(*) FROM query_logs GROUP BY model ORDER BY COUNT(*) DESC")
-            by_model = {r[0]: r[1] for r in cur.fetchall()}
+                cur.execute("SELECT model, COUNT(*) FROM query_logs GROUP BY model ORDER BY COUNT(*) DESC")
+                by_model = {r[0]: r[1] for r in cur.fetchall()}
 
-    return {
-        "by_scenario": by_scenario,
-        "by_doc_type": by_doc_type,
-        "by_product": by_product,
-        "by_model": by_model,
-    }
+        return {"by_scenario": by_scenario, "by_doc_type": by_doc_type,
+                "by_product": by_product, "by_model": by_model}
+    except Exception:
+        return empty
 
 
 _PRODUCT_LABELS = {
@@ -314,16 +316,21 @@ def _walk(path, depth=0):
 @app.get("/api/filetree")
 def api_filetree(authorization: str = Header(None)):
     get_current_user(authorization)
-    from backend.config import RAW_DIR
-    result = []
-    for vendor_dir in sorted(RAW_DIR.iterdir()):
-        if not vendor_dir.is_dir() or vendor_dir.name.startswith("."):
-            continue
-        node = _walk(vendor_dir)
-        node["label"] = _VENDOR_LABELS.get(vendor_dir.name.lower(), vendor_dir.name)
-        node["type"] = "vendor"
-        result.append(node)
-    return result
+    try:
+        from backend.config import RAW_DIR
+        if not RAW_DIR.exists():
+            return []
+        result = []
+        for vendor_dir in sorted(RAW_DIR.iterdir()):
+            if not vendor_dir.is_dir() or vendor_dir.name.startswith("."):
+                continue
+            node = _walk(vendor_dir)
+            node["label"] = _VENDOR_LABELS.get(vendor_dir.name.lower(), vendor_dir.name)
+            node["type"] = "vendor"
+            result.append(node)
+        return result
+    except Exception:
+        return []
 
 
 @app.post("/api/search")
