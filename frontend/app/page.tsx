@@ -10,7 +10,6 @@ const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 // Types
 // ---------------------------------------------------------------------------
 type Section      = "qa" | "training" | "admin";
-type ScenarioId   = "general" | "engineer" | "sales" | "cs";
 type AdminTab     = "dashboard" | "analytics" | "logs" | "kb";
 type TrainingView = "welcome" | "reading" | "quiz";
 
@@ -36,13 +35,6 @@ type ChatMessage  = {
   model?: string;
   ts: Date;
 };
-
-const SCENARIOS: { id: ScenarioId; label: string }[] = [
-  { id: "general",  label: "一般" },
-  { id: "engineer", label: "工程師" },
-  { id: "sales",    label: "Sales" },
-  { id: "cs",       label: "客服" },
-];
 
 const SCENARIO_LABELS: Record<string, string> = {
   general: "一般", engineer: "工程師", sales: "Sales", cs: "客服",
@@ -140,7 +132,6 @@ export default function Home() {
   const [messages, setMessages]       = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput]     = useState("");
   const [chatLoading, setChatLoading] = useState(false);
-  const [scenario, setScenario]       = useState<ScenarioId>("general");
   const bottomRef                     = useRef<HTMLDivElement>(null);
 
   // ── Training
@@ -194,7 +185,7 @@ export default function Home() {
     fetch(`${API}/api/stats`,     { headers: { Authorization: `Bearer ${token}` } }).then(r => r.json()).then(setAdminStats).catch(console.error);
     fetch(`${API}/api/logs?limit=100`, { headers: { Authorization: `Bearer ${token}` } }).then(r => r.json()).then(setAdminLogs).catch(console.error);
     fetch(`${API}/api/analytics`, { headers: { Authorization: `Bearer ${token}` } }).then(r => r.json()).then(setAdminAnalytics).catch(console.error);
-    fetch(`${API}/api/filetree`,  { headers: { Authorization: `Bearer ${token}` } }).then(r => r.json()).then(setFileTree).catch(console.error);
+    fetch(`${API}/api/filetree`,  { headers: { Authorization: `Bearer ${token}` } }).then(r => r.json()).then(d => { if (Array.isArray(d)) setFileTree(d); }).catch(console.error);
   }, [section, token]);
 
   // auto-scroll to bottom on new message
@@ -219,7 +210,7 @@ export default function Home() {
       const res = await fetch(`${API}/api/ask`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ query, mode: "medium", model: "qwen3:8b", scenario, top_k: 5, product: "", version: "", doc_type: "" }),
+        body: JSON.stringify({ query, mode: "medium", model: "qwen3:8b", scenario: "general", top_k: 5, product: "", version: "", doc_type: "" }),
       });
       if (!res.ok) throw new Error(`API 錯誤：${res.status}`);
       const data: AskResponse = await res.json();
@@ -233,7 +224,7 @@ export default function Home() {
         content: err instanceof Error ? err.message : "發生錯誤", ts: new Date(),
       }]);
     } finally { setChatLoading(false); }
-  }, [chatInput, chatLoading, scenario, token]);
+  }, [chatInput, chatLoading, token]);
 
   const loadCourse = async (product: string, version: string) => {
     setTrProduct(product); setTrVersion(version);
@@ -327,26 +318,15 @@ export default function Home() {
         {section === "qa" && (
           <div className="flex flex-col h-full">
 
-            {/* Scenario bar */}
-            <div className="bg-white border-b px-5 py-2 flex items-center gap-2 shrink-0">
-              <span className="text-xs text-gray-400 mr-1">場景</span>
-              {SCENARIOS.map(s => (
-                <button key={s.id} onClick={() => setScenario(s.id)}
-                  className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
-                    scenario === s.id
-                      ? "bg-gray-900 text-white"
-                      : "bg-gray-100 text-gray-500 hover:bg-gray-200"
-                  }`}>
-                  {s.label}
-                </button>
-              ))}
-              {messages.length > 0 && (
+            {/* Clear button bar */}
+            {messages.length > 0 && (
+              <div className="bg-white border-b px-5 py-2 flex justify-end shrink-0">
                 <button onClick={() => setMessages([])}
-                  className="ml-auto text-xs text-gray-300 hover:text-red-400 transition-colors">
+                  className="text-xs text-gray-300 hover:text-red-400 transition-colors">
                   清除對話
                 </button>
-              )}
-            </div>
+              </div>
+            )}
 
             {/* Messages */}
             <div className="flex-1 overflow-y-auto px-6 py-6 space-y-6">
