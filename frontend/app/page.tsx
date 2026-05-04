@@ -183,7 +183,7 @@ export default function Home() {
   useEffect(() => {
     if (section !== "admin" || !token) return;
     fetch(`${API}/api/stats`,     { headers: { Authorization: `Bearer ${token}` } }).then(r => r.json()).then(setAdminStats).catch(console.error);
-    fetch(`${API}/api/logs?limit=100`, { headers: { Authorization: `Bearer ${token}` } }).then(r => r.json()).then(setAdminLogs).catch(console.error);
+    fetch(`${API}/api/logs?limit=100`, { headers: { Authorization: `Bearer ${token}` } }).then(r => r.json()).then(d => { if (Array.isArray(d)) setAdminLogs(d); }).catch(console.error);
     fetch(`${API}/api/analytics`, { headers: { Authorization: `Bearer ${token}` } }).then(r => r.json()).then(setAdminAnalytics).catch(console.error);
     fetch(`${API}/api/filetree`,  { headers: { Authorization: `Bearer ${token}` } }).then(r => r.json()).then(d => { if (Array.isArray(d)) setFileTree(d); }).catch(console.error);
   }, [section, token]);
@@ -432,32 +432,49 @@ export default function Home() {
         ================================================================ */}
         {section === "training" && (
           <div className="flex h-full overflow-hidden">
-            <aside className="w-64 bg-white border-r overflow-y-auto shrink-0 p-3">
-              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide px-2 py-2">課程目錄</p>
-              {catalog.map(p => (
-                <div key={p.product}>
-                  <button
-                    onClick={() => setTrExpanded(prev => { const s = new Set(prev); s.has(p.product) ? s.delete(p.product) : s.add(p.product); return s; })}
-                    className="w-full flex items-center justify-between px-2 py-2 rounded-lg hover:bg-gray-50 text-sm font-medium text-gray-700 transition-colors">
-                    <span className="truncate">{p.product}</span>
-                    <span className={`text-[10px] text-gray-400 transition-transform ${trExpanded.has(p.product) ? "rotate-90" : ""}`}>▶</span>
-                  </button>
-                  {trExpanded.has(p.product) && (
-                    <div className="ml-3 space-y-0.5 mb-1">
-                      {p.versions.map(v => (
-                        <button key={v} onClick={() => loadCourse(p.product, v)}
-                          className={`w-full text-left px-3 py-1.5 rounded-lg text-xs transition-colors ${
-                            trProduct === p.product && trVersion === v
-                              ? "bg-blue-50 text-blue-700 font-medium"
-                              : "text-gray-500 hover:bg-gray-50 hover:text-gray-700"
-                          }`}>
-                          {v}
-                        </button>
-                      ))}
+            <aside className="w-64 bg-white border-r overflow-y-auto shrink-0">
+              {(() => {
+                const CFD = new Set(["Flotherm", "FLOEFD", "STAR-CCM+"]);
+                const groups = [
+                  { label: "Altair",       items: catalog.filter(p => !CFD.has(p.product)) },
+                  { label: "Siemens CFD",  items: catalog.filter(p =>  CFD.has(p.product)) },
+                ];
+                const ProductRow = ({ p }: { p: ProductItem }) => (
+                  <div key={p.product}>
+                    <button
+                      onClick={() => setTrExpanded(prev => { const s = new Set(prev); s.has(p.product) ? s.delete(p.product) : s.add(p.product); return s; })}
+                      className="w-full flex items-center justify-between px-3 py-2 rounded-lg hover:bg-gray-50 text-sm text-gray-700 transition-colors">
+                      <span className="truncate">{p.product}</span>
+                      <span className={`text-[10px] text-gray-400 transition-transform shrink-0 ${trExpanded.has(p.product) ? "rotate-90" : ""}`}>▶</span>
+                    </button>
+                    {trExpanded.has(p.product) && (
+                      <div className="ml-3 space-y-0.5 mb-1">
+                        {p.versions.map(v => (
+                          <button key={v} onClick={() => loadCourse(p.product, v)}
+                            className={`w-full text-left px-3 py-1.5 rounded-lg text-xs transition-colors ${
+                              trProduct === p.product && trVersion === v
+                                ? "bg-blue-50 text-blue-700 font-medium"
+                                : "text-gray-500 hover:bg-gray-50 hover:text-gray-700"
+                            }`}>
+                            {v}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+                return groups.map(g => g.items.length === 0 ? null : (
+                  <div key={g.label} className="mb-2">
+                    <div className="px-4 pt-4 pb-1.5 flex items-center gap-2">
+                      <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">{g.label}</span>
+                      <div className="flex-1 border-t border-gray-100" />
                     </div>
-                  )}
-                </div>
-              ))}
+                    <div className="px-2 space-y-0.5">
+                      {g.items.map(p => <ProductRow key={p.product} p={p} />)}
+                    </div>
+                  </div>
+                ));
+              })()}
             </aside>
 
             <div className="flex-1 overflow-y-auto p-6">
