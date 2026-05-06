@@ -10,7 +10,7 @@ if env_path:
 else:
     print("⚠️ 警告：找不到 .env 檔案，請確認檔案存在於專案根目錄！")
 
-SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:810126@localhost:5432/eaih_app")
+SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres@localhost:5432/eaih_app")
 
 def get_conn():
     # 優先檢查是否有完整的 DATABASE_URL，這能簡化連線邏輯並減少設定錯誤
@@ -27,7 +27,7 @@ def get_conn():
     port = (os.getenv("POSTGRES_PORT") or "5432").strip()
     dbname = (os.getenv("POSTGRES_DB") or "eaih_app").strip()
     user = (os.getenv("POSTGRES_USER") or "postgres").strip()
-    password = (os.getenv("POSTGRES_PASSWORD") or "810126").strip()
+    password = (os.getenv("POSTGRES_PASSWORD") or "").strip()
     
     print(f"🔌 嘗試連線：Host={host}, DB={dbname}, User={user} (密碼長度: {len(password) if password else 0})")
     

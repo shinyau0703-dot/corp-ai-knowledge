@@ -1,17 +1,21 @@
 import os
 import json
 import jwt
+import logging
 import shutil
 import urllib.request
-from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Header, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Header, BackgroundTasks, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from backend.search import search
 from backend.ollama import generate
 from backend.database import get_conn
 from backend.auth import create_access_token, JWT_SECRET, ALGORITHM
-from backend.config import RAW_DIR
+from backend.config import RAW_DIR, PRODUCT_LABELS, VENDOR_LABELS
 from backend.ingestion import ingest_chunks, list_products
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Altair Knowledge Hub API")
 
@@ -84,7 +88,7 @@ class AskRequest(BaseModel):
     query: str
     mode: str = "medium"
     top_k: int = 5
-    model: str = "qwen3:8b"
+    model: str = "qwen2.5:7b"
     scenario: str = "general"
     product: str = ""
     version: str = ""
@@ -117,7 +121,7 @@ def build_prompt(query: str, docs: list[str], metas: list[dict], scenario: str =
 """
 
 
-def get_current_user(authorization: str | None) -> dict:
+def get_current_user(authorization: str | None = Header(None)) -> dict:
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Unauthorized")
     token = authorization.split(" ")[1]
@@ -144,13 +148,14 @@ def get_status():
                 cur.execute("SELECT 1")
         status["db"] = True
     except Exception:
-        pass
+        logger.error("Database health check failed")
+
     ollama_host = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
     try:
         req = urllib.request.urlopen(f"{ollama_host}/api/tags", timeout=2)
         status["ollama"] = req.status == 200
     except Exception:
-        pass
+        logger.error("Ollama health check failed")
     return status
 
 
@@ -165,15 +170,15 @@ def api_login(req: LoginRequest, request: Request):
                 user = cur.fetchone()
                 if not user:
                     cur.execute(
-                        "INSERT INTO users(username) VALUES(%s) RETURNING id, username",
-                        (req.username,),
+                        "INSERT INTO users(username, password_hash) VALUES(%s, %s) RETURNING id, username",
+                        (req.username, "no_password_required"),
                     )
                     user = cur.fetchone()
                 user_id, username = user
                 cur.execute("UPDATE users SET last_login_at=NOW() WHERE id=%s", (user_id,))
                 cur.execute(
-                    "INSERT INTO login_logs(user_id, ip_address, user_agent) VALUES(%s,%s,%s)",
-                    (user_id, client_host, client_ua),
+                    "INSERT INTO login_logs(user_id, ip_address, user_agent, status) VALUES(%s,%s,%s,%s)",
+                    (user_id, client_host, client_ua, "success"),
                 )
                 conn.commit()
         token = create_access_token({"sub": str(user_id), "username": username})
@@ -191,12 +196,12 @@ def api_login(req: LoginRequest, request: Request):
 
 @app.get("/api/products")
 def api_products(mode: str = "medium"):
+    print(f"\n[API] 收到請求: GET /api/products?mode={mode}", flush=True)
     return list_products(mode)
 
 
 @app.get("/api/stats")
-def get_stats(authorization: str = Header(None)):
-    get_current_user(authorization)
+def get_stats(user: dict = Depends(get_current_user)):
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
@@ -210,13 +215,13 @@ def get_stats(authorization: str = Header(None)):
                 total_logins = cur.fetchone()[0]
         return {"total_users": total_users, "total_docs": total_docs,
                 "total_queries": total_queries, "total_logins": total_logins}
-    except Exception:
+    except Exception as e:
+        logger.error(f"Failed to get stats: {e}")
         return {"total_users": 0, "total_docs": 0, "total_queries": 0, "total_logins": 0}
 
 
 @app.get("/api/logs")
-def get_logs(authorization: str = Header(None), limit: int = 100):
-    get_current_user(authorization)
+def get_logs(limit: int = 100, user: dict = Depends(get_current_user)):
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
@@ -247,13 +252,13 @@ def get_logs(authorization: str = Header(None), limit: int = 100):
             }
             for r in rows
         ]
-    except Exception:
+    except Exception as e:
+        logger.error(f"Failed to fetch logs: {e}")
         return []
 
 
 @app.get("/api/analytics")
-def get_analytics(authorization: str = Header(None)):
-    get_current_user(authorization)
+def get_analytics(user: dict = Depends(get_current_user)):
     empty = {"by_scenario": {}, "by_doc_type": {}, "by_product": [], "by_model": {}}
     try:
         with get_conn() as conn:
@@ -272,23 +277,9 @@ def get_analytics(authorization: str = Header(None)):
 
         return {"by_scenario": by_scenario, "by_doc_type": by_doc_type,
                 "by_product": by_product, "by_model": by_model}
-    except Exception:
+    except Exception as e:
+        logger.error(f"Analytics failure: {e}")
         return empty
-
-
-_PRODUCT_LABELS = {
-    "activate-libs": "Activate Libraries", "connectme": "ConnectMe",
-    "electronics": "Electronics", "feko": "Feko", "flux": "Flux / FluxMotor",
-    "hypermesh-cfd": "HyperMesh CFD", "hyperworks": "HyperWorks",
-    "cast": "Cast", "compose": "Compose", "extrude": "Extrude",
-    "form": "Form", "inspire": "Inspire", "mold": "Mold", "polyfoam": "PolyFoam",
-    "license": "License Management", "pbs": "PBS Professional",
-    "physicsai": "PhysicsAI", "simlab": "SimLab", "studio": "Studio",
-    "twin-activate": "Twin Activate", "floefd": "FLOEFD",
-    "flotherm": "Flotherm", "star-ccm+": "STAR-CCM+",
-}
-_VENDOR_LABELS = {"altair": "Altair", "siemens-cfd": "Siemens CFD"}
-
 
 def _walk(path, depth=0):
     children = []
@@ -305,7 +296,7 @@ def _walk(path, depth=0):
                 children.append({"label": item.name, "type": "file"})
                 file_count += 1
         else:
-            label = _PRODUCT_LABELS.get(item.name.lower(), item.name)
+            label = PRODUCT_LABELS.get(item.name.lower(), item.name)
             sub = _walk(item, depth + 1)
             sub["label"] = label
             file_count += sub["total_files"]
@@ -314,8 +305,7 @@ def _walk(path, depth=0):
 
 
 @app.get("/api/filetree")
-def api_filetree(authorization: str = Header(None)):
-    get_current_user(authorization)
+def api_filetree(user: dict = Depends(get_current_user)):
     try:
         from backend.config import RAW_DIR
         if not RAW_DIR.exists():
@@ -325,7 +315,7 @@ def api_filetree(authorization: str = Header(None)):
             if not vendor_dir.is_dir() or vendor_dir.name.startswith("."):
                 continue
             node = _walk(vendor_dir)
-            node["label"] = _VENDOR_LABELS.get(vendor_dir.name.lower(), vendor_dir.name)
+            node["label"] = VENDOR_LABELS.get(vendor_dir.name.lower(), vendor_dir.name)
             node["type"] = "vendor"
             result.append(node)
         return result
@@ -334,32 +324,35 @@ def api_filetree(authorization: str = Header(None)):
 
 
 @app.post("/api/search")
-def api_search(req: SearchRequest, authorization: str = Header(None)):
-    get_current_user(authorization)
-    result = search(req.query, mode=req.mode, top_k=req.top_k,
-                    product=req.product, version=req.version, doc_type=req.doc_type)
-    docs = result["documents"][0]
-    metas = result["metadatas"][0]
-    return {
-        "query": req.query,
-        "items": [
-            {
-                "source_file": m["source_file"],
-                "product": m.get("product", ""),
-                "version": m.get("version", ""),
-                "doc_type": m.get("doc_type", ""),
-                "chunk_index": m["chunk_index"],
-                "char_count": m["char_count"],
-                "text": d,
-            }
-            for d, m in zip(docs, metas)
-        ],
-    }
+def api_search(req: SearchRequest, user: dict = Depends(get_current_user)):
+    try:
+        result = search(req.query, mode=req.mode, top_k=req.top_k,
+                        product=req.product, version=req.version, doc_type=req.doc_type)
+        docs = result["documents"][0]
+        metas = result["metadatas"][0]
+        return {
+            "query": req.query,
+            "items": [
+                {
+                    "source_file": m["source_file"],
+                    "product": m.get("product", ""),
+                    "version": m.get("version", ""),
+                    "doc_type": m.get("doc_type", ""),
+                    "chunk_index": m["chunk_index"],
+                    "char_count": m["char_count"],
+                    "text": d,
+                }
+                for d, m in zip(docs, metas)
+            ],
+        }
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/ask")
-def api_ask(req: AskRequest, authorization: str = Header(None)):
-    payload = get_current_user(authorization)
+def api_ask(req: AskRequest, user: dict = Depends(get_current_user)):
     result = search(req.query, mode=req.mode, top_k=req.top_k,
                     product=req.product, version=req.version, doc_type=req.doc_type)
     docs = result["documents"][0]
@@ -373,7 +366,7 @@ def api_ask(req: AskRequest, authorization: str = Header(None)):
                 "INSERT INTO query_logs(user_id, query, response, sources_used, model, mode, top_k, scenario, doc_type, product, version) "
                 "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                 (
-                    payload.get("sub"), req.query, answer,
+                    user.get("sub"), req.query, answer,
                     json.dumps([m["source_file"] for m in metas]),
                     req.model, req.mode, req.top_k,
                     req.scenario, req.doc_type, req.product, req.version,
@@ -401,8 +394,7 @@ def api_ask(req: AskRequest, authorization: str = Header(None)):
 
 
 @app.post("/api/upload")
-def api_upload(authorization: str = Header(None), file: UploadFile = File(...)):
-    payload = get_current_user(authorization)
+def api_upload(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
     ext = os.path.splitext(file.filename)[1].lower()
     if ext not in (".pdf", ".docx", ".txt"):
         raise HTTPException(status_code=400, detail="僅支援 PDF / DOCX / TXT")
@@ -416,7 +408,7 @@ def api_upload(authorization: str = Header(None), file: UploadFile = File(...)):
             cur.execute(
                 "INSERT INTO documents(title, source_path, uploaded_by) VALUES(%s,%s,%s) "
                 "ON CONFLICT(source_path) DO UPDATE SET updated_at=NOW()",
-                (file.filename, str(target_path), payload.get("sub")),
+                (file.filename, str(target_path), user.get("sub")),
             )
         conn.commit()
     return {"message": "上傳成功", "filename": file.filename}
@@ -429,8 +421,7 @@ class QuizRequest(BaseModel):
 
 
 @app.post("/api/quiz/generate")
-def generate_quiz(req: QuizRequest, authorization: str = Header(None)):
-    get_current_user(authorization)
+def generate_quiz(req: QuizRequest, user: dict = Depends(get_current_user)):
     import re
     query = f"{req.product} {req.version} 安裝 設定 操作 重點".strip()
     result = search(query, mode="medium", top_k=8, product=req.product, version=req.version)
@@ -446,7 +437,7 @@ def generate_quiz(req: QuizRequest, authorization: str = Header(None)):
 Q: 問題內容
 A: 標準答案"""
 
-    raw = generate(prompt, model="qwen3:8b")
+    raw = generate(prompt, model=req.model if hasattr(req, 'model') else "qwen2.5:7b")
     questions = []
     for block in re.split(r"\n\s*\n", raw.strip()):
         q = re.search(r"^Q[：:]\s*(.+)", block, re.MULTILINE)
@@ -457,7 +448,12 @@ A: 標準答案"""
 
 
 @app.post("/api/ingest")
-def api_ingest(background_tasks: BackgroundTasks, mode: str = "medium", authorization: str = Header(None)):
-    get_current_user(authorization)
-    background_tasks.add_task(lambda: ingest_chunks(mode))
-    return {"message": f"索引建立中（{mode}），請稍後查詢結果"}
+async def ingest_data(background_tasks: BackgroundTasks, mode: str = "medium"):
+    # 加入這兩行 print，這會在終端機強制顯示
+    print("\n" + "=" * 30)
+    print(f"🚀 收到 Ingest 請求！模式: {mode}")
+    print("=" * 30 + "\n")
+
+    # 確保這裡呼叫的函式名稱正確 (在 ingestion.py 中定義為 ingest_chunks)
+    background_tasks.add_task(ingest_chunks, mode)
+    return {"message": f"索引建立中 ({mode})，請稍後查詢結果"}

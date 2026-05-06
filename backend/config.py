@@ -15,3 +15,17 @@ VECTOR_SMALL_DIR = VECTOR_STORE_DIR / "small"
 VECTOR_MEDIUM_DIR = VECTOR_STORE_DIR / "medium"
 
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
+
+PRODUCT_LABELS = {
+    "activate-libs": "Activate Libraries", "connectme": "ConnectMe",
+    "electronics": "Electronics", "feko": "Feko", "flux": "Flux / FluxMotor",
+    "hypermesh-cfd": "HyperMesh CFD", "hyperworks": "HyperWorks",
+    "cast": "Cast", "compose": "Compose", "extrude": "Extrude",
+    "form": "Form", "inspire": "Inspire", "mold": "Mold", "polyfoam": "PolyFoam",
+    "license": "License Management", "pbs": "PBS Professional",
+    "physicsai": "PhysicsAI", "simlab": "SimLab", "studio": "Studio",
+    "twin-activate": "Twin Activate", "floefd": "FLOEFD",
+    "flotherm": "Flotherm", "star-ccm+": "STAR-CCM+",
+}
+
+VENDOR_LABELS = {"altair": "Altair", "siemens-cfd": "Siemens CFD"}
