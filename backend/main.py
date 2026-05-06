@@ -5,6 +5,7 @@ import logging
 import shutil
 import urllib.request
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Header, BackgroundTasks, Depends
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from backend.search import search
@@ -19,18 +20,33 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Altair Knowledge Hub API")
 
+origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://0.0.0.0:3000",
+    "http://[::1]:3000",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://0.0.0.0:3000",
-        "http://[::1]:3000",
-    ],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    if isinstance(exc, HTTPException):
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    
+    import traceback
+    error_trace = traceback.format_exc()
+    logger.error(f"Unhandled Exception: {error_trace}")
+    return JSONResponse(
+        status_code=500,
+        content={"detail": str(exc), "traceback": error_trace},
+    )
 
 # ---------------------------------------------------------------------------
 # Scenario system prompts
@@ -136,6 +152,9 @@ def get_current_user(authorization: str | None = Header(None)) -> dict:
 
 @app.get("/api/health")
 def health():
+    # 增加 LQS 環境變數檢查 (範例)
+    lqs_host = os.getenv("LQS_HOST", "Not Found")
+    logger.info(f"Health check triggered. LQS_HOST status: {lqs_host}")
     return {"status": "ok"}
 
 
@@ -353,44 +372,53 @@ def api_search(req: SearchRequest, user: dict = Depends(get_current_user)):
 
 @app.post("/api/ask")
 def api_ask(req: AskRequest, user: dict = Depends(get_current_user)):
-    result = search(req.query, mode=req.mode, top_k=req.top_k,
-                    product=req.product, version=req.version, doc_type=req.doc_type)
-    docs = result["documents"][0]
-    metas = result["metadatas"][0]
-    prompt = build_prompt(req.query, docs, metas, scenario=req.scenario)
-    answer = generate(prompt, model=req.model)
+    try:
+        result = search(req.query, mode=req.mode, top_k=req.top_k,
+                        product=req.product, version=req.version, doc_type=req.doc_type)
+        docs = result["documents"][0]
+        metas = result["metadatas"][0]
+        prompt = build_prompt(req.query, docs, metas, scenario=req.scenario)
+        answer = generate(prompt, model=req.model)
 
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO query_logs(user_id, query, response, sources_used, model, mode, top_k, scenario, doc_type, product, version) "
-                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-                (
-                    user.get("sub"), req.query, answer,
-                    json.dumps([m["source_file"] for m in metas]),
-                    req.model, req.mode, req.top_k,
-                    req.scenario, req.doc_type, req.product, req.version,
-                ),
-            )
-        conn.commit()
+        try:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO query_logs(user_id, query, response, sources_used, model, mode, top_k, scenario, doc_type, product, version) "
+                        "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                        (
+                            user.get("sub"), req.query, answer,
+                            json.dumps([m["source_file"] for m in metas]),
+                            req.model, req.mode, req.top_k,
+                            req.scenario, req.doc_type, req.product, req.version,
+                        ),
+                    )
+                conn.commit()
+        except Exception as db_e:
+            logger.error(f"Failed to log query to database: {db_e}")
 
-    return {
-        "query": req.query,
-        "answer": answer,
-        "model": req.model,
-        "mode": req.mode,
-        "sources": [
-            {
-                "source_file": m["source_file"],
-                "product": m.get("product", ""),
-                "version": m.get("version", ""),
-                "doc_type": m.get("doc_type", ""),
-                "chunk_index": m["chunk_index"],
-                "char_count": m["char_count"],
-            }
-            for m in metas
-        ],
-    }
+        return {
+            "query": req.query,
+            "answer": answer,
+            "model": req.model,
+            "mode": req.mode,
+            "sources": [
+                {
+                    "source_file": m["source_file"],
+                    "product": m.get("product", ""),
+                    "version": m.get("version", ""),
+                    "doc_type": m.get("doc_type", ""),
+                    "chunk_index": m["chunk_index"],
+                    "char_count": m["char_count"],
+                }
+                for m in metas
+            ],
+        }
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        logger.error(f"Error in api_ask: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/upload")
