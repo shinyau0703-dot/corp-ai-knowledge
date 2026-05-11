@@ -16,7 +16,7 @@ VECTOR_MEDIUM_DIR = VECTOR_STORE_DIR / "medium"
 
 # AI Models Configuration
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
-DEFAULT_LLM_MODEL = os.getenv("DEFAULT_LLM_MODEL", "qwen2.5:7b")
+DEFAULT_LLM_MODEL = os.getenv("DEFAULT_LLM_MODEL", "llama3.1:latest")
 EMBEDDING_MODEL_NAME = "BAAI/bge-m3"
 
 # Model Execution Settings

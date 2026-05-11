@@ -225,7 +225,7 @@ export default function Home() {
       const res = await fetch(`${API}/api/ask`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ query, mode: "medium", model: "qwen2.5:7b", scenario: "general", top_k: 5, product: "", version: "", doc_type: "" }),
+        body: JSON.stringify({ query, mode: "medium", model: "llama3.1:latest", scenario: "general", top_k: 5, product: "", version: "", doc_type: "" }),
       });
       if (res.status === 401) { logout(); return; }
       if (!res.ok) {
