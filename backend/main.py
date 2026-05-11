@@ -451,7 +451,7 @@ A: 標準答案"""
 async def ingest_data(background_tasks: BackgroundTasks, mode: str = "medium"):
     # 加入這兩行 print，這會在終端機強制顯示
     print("\n" + "=" * 30)
-    print(f"🚀 收到 Ingest 請求！模式: {mode}")
+    print(f"[INGEST] 收到 Ingest 請求！模式: {mode}")
     print("=" * 30 + "\n")
 
     # 確保這裡呼叫的函式名稱正確 (在 ingestion.py 中定義為 ingest_chunks)

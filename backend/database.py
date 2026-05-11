@@ -5,10 +5,10 @@ from dotenv import load_dotenv, find_dotenv
 # 強制從根目錄搜尋並載入 .env，確保 override 舊的環境變數
 env_path = find_dotenv()
 if env_path:
-    print(f"🔍 成功找到並載入環境變數檔案: {env_path}")
+    print(f"[OK] 成功找到並載入環境變數檔案: {env_path}")
     load_dotenv(env_path, override=True)
 else:
-    print("⚠️ 警告：找不到 .env 檔案，請確認檔案存在於專案根目錄！")
+    print("[WARN] 警告：找不到 .env 檔案，請確認檔案存在於專案根目錄！")
 
 SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres@localhost:5432/eaih_app")
 
@@ -19,7 +19,7 @@ def get_conn():
         try:
             return psycopg.connect(db_url, connect_timeout=5)
         except Exception as e:
-            print(f"❌ 使用 DATABASE_URL 連線失敗: {e}")
+            print(f"[ERR] 使用 DATABASE_URL 連線失敗: {e}")
             # 若 DATABASE_URL 失敗，則繼續嘗試使用下方的個別變數 fallback
 
     # 使用 strip() 確保不會因為 .env 尾端的空白字元導致認證失敗
@@ -29,7 +29,7 @@ def get_conn():
     user = (os.getenv("POSTGRES_USER") or "postgres").strip()
     password = (os.getenv("POSTGRES_PASSWORD") or "").strip()
     
-    print(f"🔌 嘗試連線：Host={host}, DB={dbname}, User={user} (密碼長度: {len(password) if password else 0})")
+    print(f"[CONN] 嘗試連線：Host={host}, DB={dbname}, User={user} (密碼長度: {len(password) if password else 0})")
     
     try:
         return psycopg.connect(
@@ -41,6 +41,6 @@ def get_conn():
             connect_timeout=5
         )
     except Exception as e:
-        print(f"❌ 無法連線至資料庫: {e}")
-        print(f"💡 請檢查 PostgreSQL 服務是否啟動，或 User/Password 是否正確。")
+        print(f"[ERR] 無法連線至資料庫: {e}")
+        print(f"[TIP] 請檢查 PostgreSQL 服務是否啟動，或 User/Password 是否正確。")
         raise e
