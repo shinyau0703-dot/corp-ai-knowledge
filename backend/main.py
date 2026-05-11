@@ -160,8 +160,8 @@ def api_login(req: LoginRequest, request: Request):
                 user = cur.fetchone()
                 if not user:
                     cur.execute(
-                        "INSERT INTO users(username, password_hash) VALUES(%s, %s) RETURNING id, username",
-                        (req.username, "no_password_required"),
+                        "INSERT INTO users(username) VALUES(%s) RETURNING id, username",
+                        (req.username,),
                     )
                     user = cur.fetchone()
                 user_id, username = user
