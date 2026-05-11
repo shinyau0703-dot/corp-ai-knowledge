@@ -167,8 +167,8 @@ def api_login(req: LoginRequest, request: Request):
                 user_id, username = user
                 cur.execute("UPDATE users SET last_login_at=NOW() WHERE id=%s", (user_id,))
                 cur.execute(
-                    "INSERT INTO login_logs(user_id, ip_address, user_agent, status) VALUES(%s,%s,%s,%s)",
-                    (user_id, client_host, client_ua, "success"),
+                    "INSERT INTO login_logs(user_id, ip_address, user_agent) VALUES(%s,%s,%s)",
+                    (user_id, client_host, client_ua),
                 )
                 conn.commit()
         token = create_access_token({"sub": str(user_id), "username": username})
