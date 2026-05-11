@@ -168,7 +168,7 @@ export default function Home() {
     setToken(t);
     const u = localStorage.getItem("user");
     if (u) setUser(JSON.parse(u));
-    fetch(`${API}/api/products?mode=medium`).then(r => r.json()).then(setCatalog).catch(console.error);
+    fetch(`${API}/api/products?mode=medium`).then(r => r.ok ? r.json() : null).then(d => { if (Array.isArray(d)) setCatalog(d); }).catch(() => {});
   }, [router]);
 
   useEffect(() => {
@@ -765,28 +765,7 @@ export default function Home() {
 
               {/* 知識庫管理 */}
               {adminTab === "kb" && (() => {
-                const CFD_PRODUCTS = new Set(["Flotherm", "FLOEFD", "STAR-CCM+"]);
-                const altair  = catalog.filter(p => !CFD_PRODUCTS.has(p.product));
-                const siemens = catalog.filter(p =>  CFD_PRODUCTS.has(p.product));
                 const totalVersions = catalog.reduce((a, p) => a + p.versions.length, 0);
-
-                const ProductCard = ({ p, accent }: { p: ProductItem; accent: string }) => (
-                  <div className={`rounded-xl border p-4 hover:shadow-md transition-shadow bg-white`}>
-                    <div className="flex items-start justify-between mb-3">
-                      <span className="text-sm font-semibold text-gray-800 leading-tight">{p.product}</span>
-                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0 ml-2 ${accent}`}>
-                        {p.versions.length}
-                      </span>
-                    </div>
-                    <div className="flex flex-wrap gap-1">
-                      {p.versions.map(v => (
-                        <span key={v} className="text-[10px] bg-gray-50 border border-gray-200 text-gray-500 px-2 py-0.5 rounded-full">
-                          {v}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                );
 
                 return (
                   <div className="space-y-6 max-w-5xl">
