@@ -4,7 +4,7 @@ import shutil
 from pathlib import Path
 import chromadb
 from chromadb.config import Settings
-from backend.config import CHUNKS_SMALL_DIR, CHUNKS_MEDIUM_DIR, VECTOR_SMALL_DIR, VECTOR_MEDIUM_DIR, VECTOR_STORE_DIR
+from backend.config import CHUNKS_SMALL_DIR, CHUNKS_MEDIUM_DIR, VECTOR_SMALL_DIR, VECTOR_MEDIUM_DIR, EMBEDDING_BATCH_SIZE
 from backend.embedder import embed_texts, get_model
 
 logger = logging.getLogger(__name__)
@@ -96,18 +96,20 @@ def ingest_chunks(mode: str = "medium"):
                 continue
 
             # 將一個檔案內的 chunks 進行分批處理，避免顯存溢出
-            batch_size = 8
+            batch_size = EMBEDDING_BATCH_SIZE
             texts = [c["text"] for c in chunks]
             
             all_embeddings = []
             for i in range(0, len(texts), batch_size):
                 batch_texts = texts[i:i + batch_size]
-                all_embeddings.extend(embed_texts(batch_texts))
+                # 索引階段明確告知非 Query
+                all_embeddings.extend(embed_texts(batch_texts, is_query=False))
 
-            # 分批寫入資料庫，提升大型檔案的處理穩定性
+            # 使用相對路徑生成唯一 ID，避免不同產品間檔名相同導致衝突
+            rel_path_str = str(file_path.relative_to(chunk_root)).replace("\\", "/").replace(".", "_")
             for i in range(0, len(texts), batch_size):
                 end_idx = i + batch_size
-                batch_ids = [f"{file_path.stem}_{mode}_{j}" for j in range(i, min(end_idx, len(texts)))]
+                batch_ids = [f"{rel_path_str}_{mode}_{j}" for j in range(i, min(end_idx, len(texts)))]
                 batch_metas = []
                 for j in range(i, min(end_idx, len(texts))):
                     chunk = chunks[j]
@@ -128,10 +130,10 @@ def ingest_chunks(mode: str = "medium"):
                 )
 
             total_chunks += len(texts)
-            print(f"   ∟ 成功索引: {len(texts)} 個區塊")
+            logger.info(f"   ∟ 成功索引: {file_path.name} ({len(texts)} 個區塊)")
             
         except Exception as e:
-            print(f"❌ 處理 {file_path.name} 時發生錯誤: {e}")
+            logger.error(f"❌ 處理 {file_path.name} 時發生錯誤: {e}", exc_info=True)
     
-    print(f"--- 🏁 索引重建完成，總計處理 {len(all_files)} 個檔案，共 {total_chunks} 個區塊 ---")
+    logger.info(f"--- 🏁 索引重建完成，總計處理 {len(all_files)} 個檔案，共 {total_chunks} 個區塊 ---")
     return {"files": len(all_files), "chunks": total_chunks}

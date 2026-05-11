@@ -1,9 +1,9 @@
 import json
 import urllib.request
 import urllib.error
-from backend.config import OLLAMA_HOST
+from backend.config import OLLAMA_HOST, DEFAULT_LLM_MODEL
 
-def generate(prompt: str, model: str = "llama3:latest") -> str:
+def generate(prompt: str, model: str = DEFAULT_LLM_MODEL) -> str:
     url = f"{OLLAMA_HOST}/api/generate"
     data = json.dumps({
         "model": model,
@@ -23,9 +23,9 @@ def generate(prompt: str, model: str = "llama3:latest") -> str:
             result = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         if e.code == 404:
-            raise RuntimeError(f"Ollama model '{model}' not found. Please run 'ollama pull {model}' on the Ollama host.")
-        raise RuntimeError(f"Ollama API error: {e.code} {e.reason}")
+            raise RuntimeError(f"找不到 Ollama 模型 '{model}'。請在主機執行 'ollama pull {model}'。")
+        raise RuntimeError(f"Ollama API 錯誤: {e.code} {e.reason}")
     except urllib.error.URLError as e:
-        raise RuntimeError(f"Failed to connect to Ollama at {OLLAMA_HOST}: {e.reason}")
+        raise RuntimeError(f"無法連線至 Ollama 服務 ({OLLAMA_HOST}): {e.reason}")
 
     return result["response"].strip()

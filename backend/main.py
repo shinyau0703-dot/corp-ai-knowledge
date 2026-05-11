@@ -12,7 +12,7 @@ from backend.search import search
 from backend.ollama import generate
 from backend.database import get_conn
 from backend.auth import create_access_token, JWT_SECRET, ALGORITHM
-from backend.config import RAW_DIR, PRODUCT_LABELS, VENDOR_LABELS
+from backend.config import RAW_DIR, PRODUCT_LABELS, VENDOR_LABELS, CORS_ORIGINS, DEFAULT_LLM_MODEL, DEFAULT_SCENARIO_SYSTEM
 from backend.ingestion import ingest_chunks, list_products
 
 logging.basicConfig(level=logging.INFO)
@@ -20,16 +20,9 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Altair Knowledge Hub API")
 
-origins = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "http://0.0.0.0:3000",
-    "http://[::1]:3000",
-]
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -47,43 +40,6 @@ async def global_exception_handler(request: Request, exc: Exception):
         status_code=500,
         content={"detail": str(exc), "traceback": error_trace},
     )
-
-# ---------------------------------------------------------------------------
-# Scenario system prompts
-# ---------------------------------------------------------------------------
-
-SCENARIO_SYSTEM = {
-    "general": (
-        "你是 Altair 官方技術文件助理，專門回答關於 Altair 軟體（HyperWorks、HyperMesh CFD、PBS、Flux、SimLab 等）的安裝、授權與使用問題。"
-        "請只根據下方提供的文件內容回答，不要推測文件以外的資訊。"
-        "若文件內容不足，請直接說「提供的文件未涵蓋此問題，建議洽 Altair 官方支援」。"
-        "回答格式：先給精簡結論，再列出依據來源（標明文件名稱與段落）。"
-    ),
-    "engineer": (
-        "你是 Altair 工程師技術支援助理，專精技術文件查詢與問題排查。"
-        "請提供詳細的技術步驟、指令語法和參數說明。"
-        "若涉及錯誤訊息，請逐步分析可能原因與解決方案，並標明對應文件來源。"
-        "回答格式：條列操作步驟，附上指令範例，標示相關文件段落。"
-    ),
-    "sales": (
-        "你是 Altair 業務支援助理，協助整理產品亮點與應用場景。"
-        "請以客戶視角整理重點功能、版本差異和應用優勢，語氣專業但易懂，適合對外說明使用。"
-        "聚焦在商業價值與用戶效益，避免過多底層技術細節。"
-        "回答格式：先列核心亮點，再補充版本重點或差異說明。"
-    ),
-    "cs": (
-        "你是 Altair 客服支援助理，協助快速回應客戶問題。"
-        "請提供簡潔明確的解答，必要時附上操作步驟，語氣親切友善。"
-        "確保回覆內容的一致性與正確性，複雜問題可建議升級技術支援。"
-        "回答格式：直接給答案，操作類問題附上步驟，結尾可加確認語句。"
-    ),
-    "onboarding": (
-        "你是 Altair 新人培訓助理，協助新進員工熟悉產品知識與作業規範。"
-        "請用淺顯易懂的方式說明，避免過多技術術語，適時提供背景知識。"
-        "幫助學習者建立完整的知識體系，循序漸進地引導理解。"
-        "回答格式：先說明概念背景，再說明操作方式，附上學習建議。"
-    ),
-}
 
 # ---------------------------------------------------------------------------
 # Request models
@@ -104,7 +60,7 @@ class AskRequest(BaseModel):
     query: str
     mode: str = "medium"
     top_k: int = 5
-    model: str = "qwen2.5:7b"
+    model: str = DEFAULT_LLM_MODEL
     scenario: str = "general"
     product: str = ""
     version: str = ""
@@ -114,8 +70,23 @@ class AskRequest(BaseModel):
 # Helpers
 # ---------------------------------------------------------------------------
 
+def get_scenario_prompt(scenario_key: str) -> str:
+    """從資料庫獲取 System Prompt，若失敗或不存在則使用 config 中的預設值"""
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT prompt FROM system_scenarios WHERE key = %s", (scenario_key,))
+                row = cur.fetchone()
+                if row:
+                    return row[0]
+    except Exception as e:
+        logger.error(f"Failed to fetch scenario '{scenario_key}' from DB: {e}")
+    
+    # Fallback 到 config.py
+    return DEFAULT_SCENARIO_SYSTEM.get(scenario_key, DEFAULT_SCENARIO_SYSTEM["general"])
+
 def build_prompt(query: str, docs: list[str], metas: list[dict], scenario: str = "general") -> str:
-    system = SCENARIO_SYSTEM.get(scenario, SCENARIO_SYSTEM["general"])
+    system = get_scenario_prompt(scenario)
     parts = []
     for i, (doc, meta) in enumerate(zip(docs, metas), 1):
         product = meta.get("product", "")
@@ -139,12 +110,12 @@ def build_prompt(query: str, docs: list[str], metas: list[dict], scenario: str =
 
 def get_current_user(authorization: str | None = Header(None)) -> dict:
     if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Unauthorized")
+        raise HTTPException(status_code=401, detail="未經授權，請先登入")
     token = authorization.split(" ")[1]
     try:
         return jwt.decode(token, JWT_SECRET, algorithms=[ALGORITHM])
     except jwt.PyJWTError:
-        raise HTTPException(status_code=401, detail="Invalid token")
+        raise HTTPException(status_code=401, detail="認證權杖 (Token) 無效或已過期")
 
 # ---------------------------------------------------------------------------
 # Endpoints
@@ -153,8 +124,8 @@ def get_current_user(authorization: str | None = Header(None)) -> dict:
 @app.get("/api/health")
 def health():
     # 增加 LQS 環境變數檢查 (範例)
-    lqs_host = os.getenv("LQS_HOST", "Not Found")
-    logger.info(f"Health check triggered. LQS_HOST status: {lqs_host}")
+    lqs_host = os.getenv("LQS_HOST", "找不到環境變數")
+    logger.info(f"執行健康檢查。LQS_HOST 狀態: {lqs_host}")
     return {"status": "ok"}
 
 
@@ -167,14 +138,14 @@ def get_status():
                 cur.execute("SELECT 1")
         status["db"] = True
     except Exception:
-        logger.error("Database health check failed")
+        logger.error("資料庫健康檢查失敗")
 
-    ollama_host = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
+    from backend.config import OLLAMA_HOST
     try:
-        req = urllib.request.urlopen(f"{ollama_host}/api/tags", timeout=2)
+        req = urllib.request.urlopen(f"{OLLAMA_HOST}/api/tags", timeout=2)
         status["ollama"] = req.status == 200
     except Exception:
-        logger.error("Ollama health check failed")
+        logger.error("Ollama 服務連線失敗")
     return status
 
 
@@ -210,7 +181,7 @@ def api_login(req: LoginRequest, request: Request):
         raise
     except Exception as e:
         import traceback; traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"伺服器內部錯誤: {str(e)}")
 
 
 @app.get("/api/products")
@@ -388,7 +359,7 @@ def api_ask(req: AskRequest, user: dict = Depends(get_current_user)):
                         "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                         (
                             user.get("sub"), req.query, answer,
-                            json.dumps([m["source_file"] for m in metas]),
+                            json.dumps([m["source_file"] for m in metas], ensure_ascii=False),
                             req.model, req.mode, req.top_k,
                             req.scenario, req.doc_type, req.product, req.version,
                         ),
@@ -446,6 +417,7 @@ class QuizRequest(BaseModel):
     product: str = ""
     version: str = ""
     count: int = 5
+    model: str = DEFAULT_LLM_MODEL
 
 
 @app.post("/api/quiz/generate")
@@ -456,7 +428,7 @@ def generate_quiz(req: QuizRequest, user: dict = Depends(get_current_user)):
     docs = result["documents"][0]
     context = "\n\n---\n\n".join(docs[:6])
 
-    prompt = f"""根據以下技術文件，出 {req.count} 道繁體中文簡答考題，測試讀者對文件的理解。
+    prompt = f"""根據以下技術文件，出 {req.count} 道繁體中文簡答考題，測試讀者對文件的理解。請務必使用繁體中文回答。
 
 文件內容：
 {context}
@@ -465,7 +437,7 @@ def generate_quiz(req: QuizRequest, user: dict = Depends(get_current_user)):
 Q: 問題內容
 A: 標準答案"""
 
-    raw = generate(prompt, model=req.model if hasattr(req, 'model') else "qwen2.5:7b")
+    raw = generate(prompt, model=req.model)
     questions = []
     for block in re.split(r"\n\s*\n", raw.strip()):
         q = re.search(r"^Q[：:]\s*(.+)", block, re.MULTILINE)

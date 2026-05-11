@@ -1,7 +1,7 @@
 import chromadb
 import logging
 from chromadb.config import Settings
-from backend.config import VECTOR_SMALL_DIR, VECTOR_MEDIUM_DIR
+from backend.config import VECTOR_SMALL_DIR, VECTOR_MEDIUM_DIR, RERANK_WEIGHT_DIVISOR, EMBEDDING_BATCH_SIZE, BGE_HYBRID_WEIGHTS, SC_RATIO_THRESHOLD
 from backend.embedder import embed_texts, get_model
 
 logger = logging.getLogger(__name__)
@@ -47,6 +47,29 @@ def _passes_filter(meta: dict, product: str, version: str, doc_type: str) -> boo
         return False
     return True
 
+def _check_sc_ratio(text: str, threshold: float) -> bool:
+    """
+    檢查文字中簡體字佔中文字符的比例是否超過閾值。
+    利用 Big5 編碼測試作為啟發式判斷（繁體中文常用字多在 Big5 範圍內）。
+    """
+    if not text:
+        return False
+    
+    total_cjk = 0
+    sc_count = 0
+    for char in text:
+        # 僅針對基本中文字符範圍進行統計
+        if '\u4e00' <= char <= '\u9fff':
+            total_cjk += 1
+            try:
+                char.encode('big5')
+            except UnicodeEncodeError:
+                sc_count += 1
+                
+    if total_cjk == 0:
+        return False
+    return (sc_count / total_cjk) > threshold
+
 
 def search(
     query: str,
@@ -77,11 +100,12 @@ def search(
         raise RuntimeError(f"Embedding model failed to load: {e}")
 
     has_filters = bool(product or version or doc_type)
-    n_fetch = min(200 if has_filters else top_k * 20, count)
+    # 適度調整抓取的候選數量，100 筆對 BGE-M3 而言是效能與召回的平衡點
+    n_fetch = min(100 if has_filters else top_k * 15, count)
     if n_fetch == 0:
         return {"documents": [[]], "metadatas": [[]], "count": 0}
 
-    query_vec = embed_texts([query])[0]
+    query_vec = embed_texts([query], is_query=True)[0]
     raw = collection.query(query_embeddings=[query_vec], n_results=n_fetch)
 
     docs = raw["documents"][0]
@@ -92,6 +116,12 @@ def search(
     for doc, meta in zip(docs, metas):
         if has_filters and not _passes_filter(meta, product, version, doc_type):
             continue
+            
+        # 檢查簡體字比例，若過高則自動排除該片段
+        if _check_sc_ratio(doc, SC_RATIO_THRESHOLD):
+            logger.info(f"已過濾簡體比例過高之片段: {meta.get('source_file')} (Index: {meta.get('chunk_index')})")
+            continue
+            
         candidates.append((doc, meta))
 
     if not candidates:
@@ -102,7 +132,11 @@ def search(
     doc_texts = [c[0] for c in candidates]
     # 這裡調用模型的 compute_score 或使用 dense 相似度來排序
     # 為了保持效能，我們對過濾後的結果進行計分
-    res = model.compute_score([[query, d] for d in doc_texts], batch_size=32)
+    res = model.compute_score(
+        [[query, d] for d in doc_texts], 
+        batch_size=EMBEDDING_BATCH_SIZE,
+        weights_for_different_modes=BGE_HYBRID_WEIGHTS
+    )
     
     # 處理不同版本的 FlagEmbedding 可能的回傳格式 (dict 或 list)
     if isinstance(res, dict):
@@ -116,7 +150,7 @@ def search(
     rows = []
     for i, (doc, meta) in enumerate(candidates):
         # 最終分數 = 語義分數 + 元資料權重
-        final_score = scores[i] + (_meta_score(meta, product, version, doc_type) / 20.0)
+        final_score = scores[i] + (_meta_score(meta, product, version, doc_type) / RERANK_WEIGHT_DIVISOR)
         rows.append((final_score, doc, meta))
 
     rows.sort(key=lambda x: x[0], reverse=True)
