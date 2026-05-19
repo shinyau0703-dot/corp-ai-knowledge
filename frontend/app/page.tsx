@@ -10,7 +10,7 @@ const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 // Types
 // ---------------------------------------------------------------------------
 type Section      = "qa" | "training" | "admin";
-type AdminTab     = "dashboard" | "analytics" | "logs" | "kb";
+type AdminTab     = "dashboard" | "analytics" | "logs" | "kb" | "users" | "settings";
 type TrainingView = "welcome" | "reading" | "quiz";
 
 type ProductItem  = { product: string; versions: string[] };
@@ -27,6 +27,9 @@ type Analytics    = {
   by_model: Record<string, number>;
 };
 type TreeNode     = { label: string; type: "vendor" | "dir" | "file"; total_files?: number; children?: TreeNode[] };
+type UserEntry    = { id: number; username: string; created_at: string | null; last_login_at: string | null; is_blocked: boolean; login_count: number };
+type ScenarioEntry = { key: string; prompt: string; updated_at: string | null };
+type UserLogEntry  = { id: number; query: string; model: string; scenario: string; product: string; version: string; created_at: string | null };
 type ChatMessage  = {
   id: string;
   role: "user" | "ai" | "error";
@@ -160,6 +163,13 @@ export default function Home() {
   const [uploading, setUploading]           = useState(false);
   const [uploadMsg, setUploadMsg]           = useState("");
   const [ingestMsg, setIngestMsg]           = useState("");
+  const [adminUsers, setAdminUsers]         = useState<UserEntry[]>([]);
+  const [scenarios, setScenarios]           = useState<ScenarioEntry[]>([]);
+  const [scenarioSaveMsgs, setScenarioSaveMsgs] = useState<Record<string, string>>({});
+  const [userLogMap, setUserLogMap]         = useState<Record<number, UserLogEntry[]>>({});
+  const [expandedUserLog, setExpandedUserLog] = useState<number | null>(null);
+  const [copiedMsgId, setCopiedMsgId]       = useState<string | null>(null);
+  const [feedbacks, setFeedbacks]           = useState<Record<string, "up" | "down">>({});
 
   // ── Init
   useEffect(() => {
@@ -194,6 +204,8 @@ export default function Home() {
     safe(`${API}/api/stats`).then(d => { if (d && typeof d.total_users === "number") setAdminStats(d); });
     safe(`${API}/api/logs?limit=100`).then(d => { if (Array.isArray(d)) setAdminLogs(d); });
     safe(`${API}/api/analytics`).then(d => { if (d && typeof d.by_scenario === "object") setAdminAnalytics(d); });
+    safe(`${API}/api/admin/users`).then(d => { if (Array.isArray(d)) setAdminUsers(d); });
+    safe(`${API}/api/admin/scenarios`).then(d => { if (Array.isArray(d)) setScenarios(d); });
     fetch(`${API}/api/filetree`, { headers: h })
       .then(r => {
         if (r.status === 401) { logout(); return Promise.reject(401); }
@@ -370,6 +382,17 @@ export default function Home() {
                     )}
                     {msg.role === "ai" && (
                       <div className="bg-white border rounded-2xl rounded-tl-sm shadow-sm px-5 py-4">
+                        <div className="flex justify-end mb-1">
+                          <button
+                            onClick={() => {
+                              navigator.clipboard.writeText(msg.content);
+                              setCopiedMsgId(msg.id);
+                              setTimeout(() => setCopiedMsgId(null), 1500);
+                            }}
+                            className="text-[10px] text-gray-300 hover:text-blue-400 transition-colors px-2 py-0.5 rounded border border-transparent hover:border-gray-200">
+                            {copiedMsgId === msg.id ? "已複製 ✓" : "複製"}
+                          </button>
+                        </div>
                         <div className="prose prose-sm max-w-none prose-headings:text-gray-800 prose-code:bg-gray-100 prose-code:px-1 prose-code:rounded text-gray-800 leading-7">
                           <ReactMarkdown>{msg.content}</ReactMarkdown>
                         </div>
@@ -389,7 +412,18 @@ export default function Home() {
                             </div>
                           </details>
                         )}
-                        {msg.model && <div className="mt-2 text-[10px] text-gray-300">{msg.model}</div>}
+                        <div className="flex items-center justify-between mt-2">
+                          {msg.model && <div className="text-[10px] text-gray-300">{msg.model}</div>}
+                          <div className="flex gap-1 ml-auto">
+                            {(["up", "down"] as const).map(dir => (
+                              <button key={dir}
+                                onClick={() => setFeedbacks(p => ({ ...p, [msg.id]: dir }))}
+                                className={`text-base transition-colors ${feedbacks[msg.id] === dir ? "text-blue-500" : "text-gray-200 hover:text-gray-400"}`}>
+                                {dir === "up" ? "👍" : "👎"}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
                       </div>
                     )}
                     {msg.role === "error" && (
@@ -624,6 +658,8 @@ export default function Home() {
                 { id: "analytics", label: "查詢分析" },
                 { id: "logs",      label: "查詢紀錄" },
                 { id: "kb",        label: "知識庫管理" },
+                { id: "users",     label: "用戶管理" },
+                { id: "settings",  label: "系統設定" },
               ] as { id: AdminTab; label: string }[]).map(t => (
                 <button key={t.id} onClick={() => setAdminTab(t.id)}
                   className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${adminTab === t.id ? "bg-gray-900 text-white" : "text-gray-500 hover:text-gray-800"}`}>
@@ -849,6 +885,167 @@ export default function Home() {
                   </div>
                 );
               })()}
+
+              {/* 用戶管理 */}
+              {adminTab === "users" && (
+                <div className="space-y-4 max-w-5xl">
+                  <div className="bg-white rounded-2xl border shadow-sm overflow-hidden">
+                    <div className="px-6 py-4 border-b flex items-center justify-between">
+                      <h3 className="text-sm font-semibold text-gray-700">用戶清單</h3>
+                      <span className="text-xs text-gray-400">{adminUsers.length} 位用戶</span>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead className="bg-gray-50 text-xs text-gray-500">
+                          <tr>
+                            <th className="text-left px-6 py-3 font-medium">用戶名稱</th>
+                            <th className="text-left px-4 py-3 font-medium">建立時間</th>
+                            <th className="text-left px-4 py-3 font-medium">最後登入</th>
+                            <th className="text-center px-4 py-3 font-medium">登入次數</th>
+                            <th className="text-center px-4 py-3 font-medium">狀態</th>
+                            <th className="text-center px-4 py-3 font-medium">操作</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-50">
+                          {adminUsers.map(u => (
+                            <>
+                              <tr key={u.id} className="hover:bg-gray-50 transition-colors">
+                                <td className="px-6 py-3 font-medium text-gray-800">{u.username}</td>
+                                <td className="px-4 py-3 text-gray-400 text-xs">{fmt(u.created_at)}</td>
+                                <td className="px-4 py-3 text-gray-400 text-xs">{fmt(u.last_login_at)}</td>
+                                <td className="px-4 py-3 text-center text-gray-600">{u.login_count}</td>
+                                <td className="px-4 py-3 text-center">
+                                  <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${u.is_blocked ? "bg-red-100 text-red-600" : "bg-green-100 text-green-700"}`}>
+                                    {u.is_blocked ? "封鎖" : "正常"}
+                                  </span>
+                                </td>
+                                <td className="px-4 py-3 text-center">
+                                  <div className="flex items-center justify-center gap-2">
+                                    <button
+                                      onClick={() => {
+                                        const id = u.id;
+                                        if (expandedUserLog === id) { setExpandedUserLog(null); return; }
+                                        setExpandedUserLog(id);
+                                        if (!userLogMap[id]) {
+                                          const h = { Authorization: `Bearer ${token}` };
+                                          fetch(`${API}/api/admin/users/${id}/logs`, { headers: h })
+                                            .then(r => r.ok ? r.json() : [])
+                                            .then(d => setUserLogMap(p => ({ ...p, [id]: d })))
+                                            .catch(() => {});
+                                        }
+                                      }}
+                                      className="text-xs text-blue-500 hover:text-blue-700 transition-colors">
+                                      查詢紀錄
+                                    </button>
+                                    <button
+                                      onClick={() => {
+                                        const h = { Authorization: `Bearer ${token}` };
+                                        fetch(`${API}/api/admin/users/${u.id}/block`, {
+                                          method: "PUT", headers: { ...h, "Content-Type": "application/json" },
+                                          body: JSON.stringify({ blocked: !u.is_blocked }),
+                                        }).then(r => r.ok ? r.json() : null).then(d => {
+                                          if (d) setAdminUsers(prev => prev.map(x => x.id === u.id ? { ...x, is_blocked: !u.is_blocked } : x));
+                                        }).catch(() => {});
+                                      }}
+                                      className={`text-xs transition-colors ${u.is_blocked ? "text-green-500 hover:text-green-700" : "text-orange-400 hover:text-orange-600"}`}>
+                                      {u.is_blocked ? "解封" : "封鎖"}
+                                    </button>
+                                    <button
+                                      onClick={() => {
+                                        if (!window.confirm(`確定刪除用戶「${u.username}」？此操作不可還原。`)) return;
+                                        const h = { Authorization: `Bearer ${token}` };
+                                        fetch(`${API}/api/admin/users/${u.id}`, { method: "DELETE", headers: h })
+                                          .then(r => { if (r.ok) setAdminUsers(prev => prev.filter(x => x.id !== u.id)); })
+                                          .catch(() => {});
+                                      }}
+                                      className="text-xs text-red-400 hover:text-red-600 transition-colors">
+                                      刪除
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                              {expandedUserLog === u.id && (
+                                <tr key={`log-${u.id}`}>
+                                  <td colSpan={6} className="px-6 py-3 bg-blue-50">
+                                    <div className="text-xs font-semibold text-blue-600 mb-2">最近查詢紀錄</div>
+                                    {!userLogMap[u.id] ? (
+                                      <p className="text-xs text-gray-400 animate-pulse">載入中…</p>
+                                    ) : userLogMap[u.id].length === 0 ? (
+                                      <p className="text-xs text-gray-400">無查詢紀錄</p>
+                                    ) : (
+                                      <div className="space-y-1 max-h-48 overflow-y-auto">
+                                        {userLogMap[u.id].map(l => (
+                                          <div key={l.id} className="flex gap-3 text-xs text-gray-600 bg-white rounded px-3 py-1.5">
+                                            <span className="text-gray-300 shrink-0">{fmt(l.created_at)}</span>
+                                            <span className="truncate flex-1">{l.query}</span>
+                                            <span className="text-gray-300 shrink-0">{l.product} {l.version}</span>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </td>
+                                </tr>
+                              )}
+                            </>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* 系統設定 */}
+              {adminTab === "settings" && (
+                <div className="space-y-4 max-w-3xl">
+                  <div className="bg-white rounded-2xl border shadow-sm p-6">
+                    <h3 className="text-sm font-semibold text-gray-700 mb-1">AI 系統提示詞</h3>
+                    <p className="text-xs text-gray-400 mb-5">調整各場景的 AI 回答風格與指令，儲存後立即生效，不需重啟服務。</p>
+                    <div className="space-y-6">
+                      {scenarios.map(s => (
+                        <div key={s.key} className="border rounded-xl p-4">
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="text-sm font-semibold text-gray-700 capitalize">{s.key}</span>
+                            {s.updated_at && <span className="text-[10px] text-gray-300">更新於 {fmt(s.updated_at)}</span>}
+                          </div>
+                          <textarea
+                            rows={5}
+                            defaultValue={s.prompt}
+                            id={`scenario-${s.key}`}
+                            className="w-full text-sm text-gray-700 border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-300 resize-y font-mono leading-6"
+                          />
+                          <div className="flex items-center justify-between mt-2">
+                            {scenarioSaveMsgs[s.key] && (
+                              <span className={`text-xs ${scenarioSaveMsgs[s.key].startsWith("✓") ? "text-green-600" : "text-red-500"}`}>
+                                {scenarioSaveMsgs[s.key]}
+                              </span>
+                            )}
+                            <button
+                              onClick={() => {
+                                const el = document.getElementById(`scenario-${s.key}`) as HTMLTextAreaElement;
+                                const prompt = el?.value ?? "";
+                                const h = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+                                fetch(`${API}/api/admin/scenarios/${s.key}`, {
+                                  method: "PUT", headers: h,
+                                  body: JSON.stringify({ prompt }),
+                                }).then(r => r.ok ? r.json() : Promise.reject())
+                                  .then(() => setScenarioSaveMsgs(p => ({ ...p, [s.key]: "✓ 已儲存" })))
+                                  .catch(() => setScenarioSaveMsgs(p => ({ ...p, [s.key]: "✗ 儲存失敗" })));
+                                setTimeout(() => setScenarioSaveMsgs(p => ({ ...p, [s.key]: "" })), 3000);
+                              }}
+                              className="ml-auto bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold px-4 py-1.5 rounded-lg transition-colors">
+                              儲存
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                      {scenarios.length === 0 && (
+                        <p className="text-sm text-gray-400 text-center py-8 animate-pulse">載入中…</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
 
             </div>
           </div>

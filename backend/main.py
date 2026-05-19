@@ -20,6 +20,30 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Altair Knowledge Hub API")
 
+@app.on_event("startup")
+def run_migrations():
+    """啟動時自動建立缺少的 table / column"""
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS system_scenarios (
+                        key VARCHAR(50) PRIMARY KEY,
+                        prompt TEXT NOT NULL,
+                        updated_at TIMESTAMPTZ DEFAULT NOW()
+                    )
+                """)
+                for key, prompt in DEFAULT_SCENARIO_SYSTEM.items():
+                    cur.execute(
+                        "INSERT INTO system_scenarios(key, prompt) VALUES(%s,%s) ON CONFLICT(key) DO NOTHING",
+                        (key, prompt),
+                    )
+                cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_blocked BOOLEAN DEFAULT FALSE")
+            conn.commit()
+        logger.info("DB migration completed")
+    except Exception as e:
+        logger.error(f"DB migration failed: {e}")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -113,9 +137,21 @@ def get_current_user(authorization: str | None = Header(None)) -> dict:
         raise HTTPException(status_code=401, detail="未經授權，請先登入")
     token = authorization.split(" ")[1]
     try:
-        return jwt.decode(token, JWT_SECRET, algorithms=[ALGORITHM])
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[ALGORITHM])
     except jwt.PyJWTError:
         raise HTTPException(status_code=401, detail="認證權杖 (Token) 無效或已過期")
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT is_blocked FROM users WHERE id=%s", (payload.get("sub"),))
+                row = cur.fetchone()
+                if row and row[0]:
+                    raise HTTPException(status_code=403, detail="帳號已被封鎖")
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+    return payload
 
 # ---------------------------------------------------------------------------
 # Endpoints
@@ -419,6 +455,12 @@ class QuizRequest(BaseModel):
     count: int = 5
     model: str = DEFAULT_LLM_MODEL
 
+class ScenarioUpdateRequest(BaseModel):
+    prompt: str
+
+class BlockRequest(BaseModel):
+    blocked: bool
+
 
 @app.post("/api/quiz/generate")
 def generate_quiz(req: QuizRequest, user: dict = Depends(get_current_user)):
@@ -449,11 +491,126 @@ A: 標準答案"""
 
 @app.post("/api/ingest")
 async def ingest_data(background_tasks: BackgroundTasks, mode: str = "medium"):
-    # 加入這兩行 print，這會在終端機強制顯示
     print("\n" + "=" * 30)
     print(f"[INGEST] 收到 Ingest 請求！模式: {mode}")
     print("=" * 30 + "\n")
-
-    # 確保這裡呼叫的函式名稱正確 (在 ingestion.py 中定義為 ingest_chunks)
     background_tasks.add_task(ingest_chunks, mode)
     return {"message": f"索引建立中 ({mode})，請稍後查詢結果"}
+
+
+# ---------------------------------------------------------------------------
+# Admin: System Scenarios (System Prompt)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/admin/scenarios")
+def admin_get_scenarios(user: dict = Depends(get_current_user)):
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT key, prompt, updated_at FROM system_scenarios ORDER BY key")
+                rows = cur.fetchall()
+        return [{"key": r[0], "prompt": r[1], "updated_at": r[2].isoformat() if r[2] else None} for r in rows]
+    except Exception as e:
+        logger.error(f"Failed to fetch scenarios: {e}")
+        return [{"key": k, "prompt": p, "updated_at": None} for k, p in DEFAULT_SCENARIO_SYSTEM.items()]
+
+
+@app.put("/api/admin/scenarios/{key}")
+def admin_update_scenario(key: str, req: ScenarioUpdateRequest, user: dict = Depends(get_current_user)):
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO system_scenarios(key, prompt, updated_at) VALUES(%s,%s,NOW()) "
+                    "ON CONFLICT(key) DO UPDATE SET prompt=EXCLUDED.prompt, updated_at=NOW()",
+                    (key, req.prompt),
+                )
+            conn.commit()
+        return {"message": "已儲存"}
+    except Exception as e:
+        logger.error(f"Failed to update scenario: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# Admin: User Management
+# ---------------------------------------------------------------------------
+
+@app.get("/api/admin/users")
+def admin_get_users(user: dict = Depends(get_current_user)):
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT u.id, u.username, u.created_at, u.last_login_at,
+                           u.is_blocked, COUNT(ll.id) AS login_count
+                    FROM users u
+                    LEFT JOIN login_logs ll ON ll.user_id = u.id
+                    GROUP BY u.id, u.username, u.created_at, u.last_login_at, u.is_blocked
+                    ORDER BY u.created_at DESC
+                """)
+                rows = cur.fetchall()
+        return [
+            {
+                "id": r[0], "username": r[1],
+                "created_at": r[2].isoformat() if r[2] else None,
+                "last_login_at": r[3].isoformat() if r[3] else None,
+                "is_blocked": r[4] or False,
+                "login_count": r[5],
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        logger.error(f"Failed to fetch users: {e}")
+        return []
+
+
+@app.delete("/api/admin/users/{uid}")
+def admin_delete_user(uid: int, user: dict = Depends(get_current_user)):
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM login_logs WHERE user_id=%s", (uid,))
+                cur.execute("DELETE FROM query_logs WHERE user_id=%s", (uid,))
+                cur.execute("DELETE FROM users WHERE id=%s", (uid,))
+            conn.commit()
+        return {"message": "已刪除"}
+    except Exception as e:
+        logger.error(f"Failed to delete user {uid}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/admin/users/{uid}/block")
+def admin_block_user(uid: int, req: BlockRequest, user: dict = Depends(get_current_user)):
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("UPDATE users SET is_blocked=%s WHERE id=%s", (req.blocked, uid))
+            conn.commit()
+        return {"message": "已封鎖" if req.blocked else "已解封"}
+    except Exception as e:
+        logger.error(f"Failed to block/unblock user {uid}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/admin/users/{uid}/logs")
+def admin_get_user_logs(uid: int, user: dict = Depends(get_current_user)):
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT id, query, model, scenario, product, version, created_at
+                    FROM query_logs WHERE user_id=%s ORDER BY created_at DESC LIMIT 50
+                """, (uid,))
+                rows = cur.fetchall()
+        return [
+            {
+                "id": r[0], "query": r[1], "model": r[2],
+                "scenario": r[3], "product": r[4], "version": r[5],
+                "created_at": r[6].isoformat() if r[6] else None,
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        logger.error(f"Failed to fetch logs for user {uid}: {e}")
+        return []
